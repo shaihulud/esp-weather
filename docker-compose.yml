@@ -1,0 +1,47 @@
+version: "3"
+
+services:
+  postgres:
+    image: postgres:13-alpine
+    container_name: postgres
+    restart: always
+    ports:
+      - 5432:5432
+    environment:
+      - POSTGRES_HOST=localhost
+      - POSTGRES_DB=weather
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-storage:/var/lib/postgresql/data
+    networks:
+      - postgres
+
+  grafana:
+    image: grafana/grafana:7.5.0
+    container_name: grafana
+    restart: always
+    ports:
+      - 3000:3000
+    environment:
+      - GF_LOG_MODE="console file"
+      - GF_PATHS_LOGS=/var/log/grafana/
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+      - GF_SERVER_ROOT_URL=http://localhost:3000/grafana/
+      - GF_SERVER_SERVE_FROM_SUB_PATH="true"
+      - GF_USERS_DEFAULT_THEME="dark"
+    volumes:
+      - grafana-storage:/var/lib/grafana
+    depends_on:
+      - postgres
+    networks:
+      - postgres
+
+networks:
+  postgres:
+    driver: bridge
+
+volumes:
+  postgres:
+  grafana:
