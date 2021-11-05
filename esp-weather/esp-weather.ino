@@ -75,9 +75,9 @@ status_2:
     if (pg_status == 2) {
         char query[90];
         snprintf_P(
-          query, 
-          sizeof(query), 
-          PSTR("INSERT INTO room_mine VALUES (DEFAULT, %.1f, %.1f, %.1f, %.1f, %.1f, %u)"), 
+          query,
+          sizeof(query),
+          PSTR("INSERT INTO room_mine VALUES (DEFAULT, %.1f, %.1f, %.1f, %.1f, %.1f, %u)"),
           temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, co2val
         );
 
@@ -188,7 +188,7 @@ void loop() {
   // SHT31
   float temp_sht = sht31.readTemperature();
   float humi_sht = sht31.readHumidity();
-  Serial.print("Temp SHT31: "); Serial.print(temp_sht); Serial.println(" *C"); 
+  Serial.print("Temp SHT31: "); Serial.print(temp_sht); Serial.println(" *C");
   Serial.print("Hum SHT31: "); Serial.print(humi_sht); Serial.println(" %");
 
   // BME280
@@ -219,11 +219,11 @@ void sendRequest(byte packet[])
     s8.write(readCO2,7);
     delay(50);
   }
-  
+
   int timeout=0;  //set a timeoute counter
   while(s8.available() < 7 ) //Wait to get a 7 byte response
   {
-    timeout++;  
+    timeout++;
     if(timeout > 10)    //if it takes to long there was probably an error
       {
         while(s8.available())  //flush whatever we have
@@ -232,11 +232,11 @@ void sendRequest(byte packet[])
       }
       delay(50);
   }
-  
+
   for (int i=0; i < 7; i++)
   {
     response[i] = s8.read();
-  }  
+  }
 }
 
 unsigned long getValue(byte packet[])
