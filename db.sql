@@ -5,7 +5,10 @@ CREATE TABLE room_mine (
     humidity_bme    real,
     temperature_sht real,
     humidity_sht    real,
-    co2             smallint
+    co2             smallint,
+    pm01            smallint,
+    pm25            smallint,
+    pm10            smallint
 );
 CREATE UNIQUE INDEX dt_idx ON room_mine (dt);
 

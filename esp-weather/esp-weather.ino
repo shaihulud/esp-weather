@@ -3,12 +3,11 @@
      Licensed under MIT license
 */
 #include <WiFi.h>
-//#include <Wire.h>
-//#include <SPIFFS.h>
 
 #include "SoftwareSerial.h"
 #include <Adafruit_BME280.h>
 #include "Adafruit_SHT31.h"
+#include <PMserial.h>
 #include "SimplePgSQL.h"
 
 const char* ssid     = "SSID NAME HERE";
@@ -28,6 +27,7 @@ PGconnection conn(&client, 0, 1024, buffer);
 // Sensors config
 Adafruit_BME280 bme;
 Adafruit_SHT31 sht31 = Adafruit_SHT31();
+SerialPM pms(PMSA003, 34, 35); // PMSx003, RX, TX
 SoftwareSerial s8(16,17);  //Sets up a virtual serial port
 
 byte readCO2[] = {0xFE, 0X44, 0X00, 0X08, 0X02, 0X9F, 0X25};  //Command packet to read Co2
@@ -45,7 +45,7 @@ byte response[] = {0,0,0,0,0,0,0};  //create an array to store the response
 int pg_status = 0;
 
 // Подсоединяется к PostgreSQL и отправляет в него данные
-void doPg(float temp_bme, float pres_bme, float humi_bme, float temp_sht, float humi_sht, unsigned long co2val)
+void doPg(float temp_bme, float pres_bme, float humi_bme, float temp_sht, float humi_sht, unsigned long co2val, unsigned long pm01, unsigned long pm25, unsigned long pm10)
 {
     char *msg;
     int rc;
@@ -77,8 +77,8 @@ status_2:
         snprintf_P(
           query,
           sizeof(query),
-          PSTR("INSERT INTO room_mine VALUES (DEFAULT, %.1f, %.1f, %.1f, %.1f, %.1f, %u)"),
-          temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, co2val
+          PSTR("INSERT INTO room_mine VALUES (DEFAULT, %.1f, %.1f, %.1f, %.1f, %.1f, %u, %u, %u, %u)"),
+          temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, co2val, pm01, pm25, pm10
         );
 
         if (conn.execute(query, false)) goto error;
@@ -180,6 +180,9 @@ void setup() {
         Serial.println("Could not find a valid BME280 sensor, check wiring, address, sensor ID!");
         Serial.print("SensorID was: 0x"); Serial.println(bme.sensorID(), 16);
     }
+
+    // Connect to PMSx003
+    pms.init();
 }
 
 void loop() {
@@ -197,13 +200,21 @@ void loop() {
   Serial.print("Hum BME280:  "); Serial.print(humi_bme); Serial.println(" %");
   Serial.print("Press BME280: "); Serial.println(pres_bme);
 
+  // PMSx003
+  pms.read();
+  if (pms) {
+      Serial.print(F("PM0.1: "));Serial.print(pms.pm01);Serial.println(F(" [ug/m3]"));
+      Serial.print(F("PM2.5: "));Serial.print(pms.pm25);Serial.println(F(" [ug/m3]"));
+      Serial.print(F("PM10:  ")) ;Serial.print(pms.pm10);Serial.println(F(" [ug/m3]"));
+  }
+
   // Senseair S8
   sendRequest(readCO2);
   unsigned long co2val = getValue(response);
   Serial.print("CO2 ppm = "); Serial.println(co2val);
 
   // Отправим данные в PostgreSQL
-  doPg(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, co2val);
+  doPg(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, co2val, pms.pm01, pms.pm25, pms.pm10);
 
   // Wait 30sec till next read
   Serial.println();
