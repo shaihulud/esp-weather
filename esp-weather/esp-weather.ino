@@ -1,6 +1,6 @@
 /*
-     CO2, temperature, humidity and pressure monitoring with ESP32.
-     Licensed under MIT license.
+     Мониторинг CO2, PM2.5, температуры, влажности и давления с помощью ESP32
+     Licensed under MIT license
 */
 #include <WiFi.h>
 //#include <Wire.h>
@@ -9,7 +9,7 @@
 #include "SoftwareSerial.h"
 #include <Adafruit_BME280.h>
 #include "Adafruit_SHT31.h"
-#include <SimplePgSQL.h>
+#include "SimplePgSQL.h"
 
 const char* ssid     = "SSID NAME HERE";
 const char* password = "PASSWORD HERE";
@@ -167,8 +167,6 @@ void setup() {
     Serial.print("IP address:\t");
     Serial.println(WiFi.localIP());
 
-    GetExternalIP();
-
     // Connect to Senseair S8
     s8.begin(9600);
 
@@ -188,15 +186,15 @@ void loop() {
   // SHT31
   float temp_sht = sht31.readTemperature();
   float humi_sht = sht31.readHumidity();
-  Serial.print("Temp SHT31: "); Serial.print(temp_sht); Serial.println(" *C");
-  Serial.print("Hum SHT31: "); Serial.print(humi_sht); Serial.println(" %");
+  Serial.print("Temp SHT31:  "); Serial.print(temp_sht); Serial.println(" *C");
+  Serial.print("Hum SHT31:   "); Serial.print(humi_sht); Serial.println(" %");
 
   // BME280
   float temp_bme = bme.readTemperature();
   float humi_bme = bme.readHumidity();
   float pres_bme = bme.readPressure() / 133.322F;
   Serial.print("Temp BME280: "); Serial.print(temp_bme); Serial.println(" *C");
-  Serial.print("Hum BME280: "); Serial.print(humi_bme); Serial.println(" %");
+  Serial.print("Hum BME280:  "); Serial.print(humi_bme); Serial.println(" %");
   Serial.print("Press BME280: "); Serial.println(pres_bme);
 
   // Senseair S8
@@ -204,7 +202,7 @@ void loop() {
   unsigned long co2val = getValue(response);
   Serial.print("CO2 ppm = "); Serial.println(co2val);
 
-  // Send data to PostgreSQL
+  // Отправим данные в PostgreSQL
   doPg(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, co2val);
 
   // Wait 30sec till next read
@@ -246,29 +244,4 @@ unsigned long getValue(byte packet[])
 
     unsigned long val = high*256 + low;                //Combine high byte and low byte with this formula to get value
     return val;
-}
-
-void GetExternalIP() {
-  if (!client.connect("api.ipify.org", 80)) {
-    Serial.println("Failed to connect with 'api.ipify.org' !");
-  }
-  else {
-    int timeout = millis() + 5000;
-    client.print("GET /?format=json HTTP/1.1\r\nHost: api.ipify.org\r\n\r\n");
-    while (client.available() == 0) {
-      if (timeout - millis() < 0) {
-        Serial.println(">>> Client Timeout !");
-        client.stop();
-        return;
-      }
-    }
-    int size;
-    while ((size = client.available()) > 0) {
-      uint8_t* msg = (uint8_t*)malloc(size);
-      size = client.read(msg, size);
-      Serial.write(msg, size);
-      free(msg);
-      Serial.println("\n\n");
-    }
-  }
 }
