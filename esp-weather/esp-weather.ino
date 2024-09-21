@@ -12,15 +12,7 @@
 #include "Adafruit_SHT31.h"
 #include <PMserial.h>
 #include "SimplePgSQL.h"
-
 #include <TFT_eSPI.h>
-#include <SPI.h>
-
-
-#include "esp_air.h"
-#include "esp_co2.h"
-#include "esp_humi.h"
-#include "esp_press.h"
 
 
 const char* ssid     = "SSID NAME HERE";
@@ -47,7 +39,7 @@ byte readCO2[] = {0xFE, 0X44, 0X00, 0X08, 0X02, 0X9F, 0X25};  //Command packet t
 byte response[] = {0,0,0,0,0,0,0};  //create an array to store the response
 
 
-TFT_eSPI tft = TFT_eSPI();       // Invoke custom library
+TFT_eSPI tft = TFT_eSPI();
 #define LOOP_PERIOD 35 // Display updates every 35 ms
 
 
@@ -159,10 +151,10 @@ error:
 
 
 void setup() {
+    Serial.begin(9600);
+
     tft.init();
     tft.setRotation(0);
-
-    Serial.begin(9600);
     tft.fillScreen(TFT_BLACK);
 
     //SPIFFS.begin(true);  // Will format on the first run after failing to mount
@@ -196,13 +188,6 @@ void setup() {
 
     // Connect to PMSx003
     pms.init();
-
-    // Draw PROGMEM const unsigned char air_logo[] = {
-    tft.setTextSize(4);
-    tft.drawXBitmap(0+30,   13+60, air_logo, air_width, air_height, TFT_WHITE);
-    tft.drawXBitmap(120+30, 13+60, humi_logo, humi_width, humi_height, TFT_WHITE);
-    tft.drawXBitmap(0+25,   13+60+60+13+40, press_logo, press_width, press_height, TFT_WHITE);
-    tft.drawXBitmap(120+30, 13+60+60+13+40, co2_logo, co2_width, co2_height, TFT_WHITE);
 }
 
 void loop() {
@@ -234,20 +219,34 @@ void loop() {
   Serial.print("CO2 ppm = "); Serial.println(co2val);
 
   // Отправим данные на экран
-  tft.drawFloat((temp_sht + temp_bme) / 2, 1, 0+13,   36);
-  tft.drawFloat((humi_sht + humi_bme) / 2, 1, 120+13, 36);
-  tft.drawFloat(pres_bme,                  0, 20,     13+60+60+13);
-  tft.drawNumber(co2val,                      140,    13+60+60+13);
+  char buffer[40];
+
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  //tft.loadFont(AA_FONT_SMALL);
+
+  tft.setTextSize(1);
+  tft.drawString("Temp:",                     0+13,   2,  4);
+  tft.drawString("Humi:",                     120+23, 2,  4);
+  tft.drawFloat((temp_sht + temp_bme) / 2, 0, 0,      27, 7);
+  tft.drawFloat((humi_sht + humi_bme) / 2, 0, 120+10, 27, 7);
+
+  tft.drawString("Press:",                    0+13,   90, 4);
+  tft.drawString("CO2:",                      120+23, 90, 4);
+  tft.drawFloat(pres_bme,                  0, 0,      115, 7);
+  if (co2val < 1000) {
+    tft.drawNumber(co2val,                    120+10, 115, 7);
+  } else {
+    tft.drawNumber(co2val,                    115,    115, 7);
+  }
 
   tft.setTextSize(2);
-  char buffer[40];
-  sprintf(buffer, "PM0.1: %d [ug/m3]", pms.pm01);
+  sprintf(buffer, "PM0.1: %d", pms.pm01);
   tft.drawString(buffer, 0+13, 13+60+60+13+40+65);
-  sprintf(buffer, "PM2.5: %d [ug/m3]", pms.pm25);
+  sprintf(buffer, "PM2.5: %d", pms.pm25);
   tft.drawString(buffer, 0+13, 13+60+60+13+40+65+21);
-  sprintf(buffer, "PM10:  %d [ug/m3]", pms.pm10);
+  sprintf(buffer, "PM10:  %d", pms.pm10);
   tft.drawString(buffer, 0+13, 13+60+60+13+40+65+21+21);
-  tft.setTextSize(4);
 
   // Отправим данные в PostgreSQL
   // doPg(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, co2val, pms.pm01, pms.pm25, pms.pm10);
