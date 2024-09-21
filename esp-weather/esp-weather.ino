@@ -1,7 +1,10 @@
 /*
-     Мониторинг CO2, PM2.5, температуры, влажности и давления с помощью ESP32
-     Licensed under MIT license
-*/
+ #########################################################################
+ ###### DON'T FORGET TO UPDATE THE User_Setup.h FILE IN THE LIBRARY ######
+ #########################################################################
+
+ Uncomment section starting with: For ESP32 Dev board (only tested with ILI9341 display)
+ */
 #include <WiFi.h>
 
 #include "SoftwareSerial.h"
@@ -9,6 +12,16 @@
 #include "Adafruit_SHT31.h"
 #include <PMserial.h>
 #include "SimplePgSQL.h"
+
+#include <TFT_eSPI.h>
+#include <SPI.h>
+
+
+#include "esp_air.h"
+#include "esp_co2.h"
+#include "esp_humi.h"
+#include "esp_press.h"
+
 
 const char* ssid     = "SSID NAME HERE";
 const char* password = "PASSWORD HERE";
@@ -21,8 +34,8 @@ const char* pg_dbname   = "weather";
 IPAddress PGIP(192,168,1,5);
 WiFiClient client;
 
-char buffer[1024];
-PGconnection conn(&client, 0, 1024, buffer);
+char pgbuffer[1024];
+PGconnection conn(&client, 0, 1024, pgbuffer);
 
 // Sensors config
 Adafruit_BME280 bme;
@@ -34,12 +47,8 @@ byte readCO2[] = {0xFE, 0X44, 0X00, 0X08, 0X02, 0X9F, 0X25};  //Command packet t
 byte response[] = {0,0,0,0,0,0,0};  //create an array to store the response
 
 
-//String getConfig(const String& fn) {
-//    File f = SPIFFS.open(fn, "r");
-//    String r = f.readString();
-//    f.close();
-//    return r;
-//}
+TFT_eSPI tft = TFT_eSPI();       // Invoke custom library
+#define LOOP_PERIOD 35 // Display updates every 35 ms
 
 
 int pg_status = 0;
@@ -150,22 +159,26 @@ error:
 
 
 void setup() {
+    tft.init();
+    tft.setRotation(0);
+
     Serial.begin(9600);
+    tft.fillScreen(TFT_BLACK);
 
     //SPIFFS.begin(true);  // Will format on the first run after failing to mount
     //String ssid = getConfig("/wifi-ssid");
     //String pass = getConfig("/wifi-password");
 
     // Connect to the network
-    WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) { // Wait for the Wi-Fi to connect
-        delay(500);
-        Serial.print('.');
-    }
-    Serial.println('\n');
-    Serial.println("Connection established");
-    Serial.print("IP address:\t");
-    Serial.println(WiFi.localIP());
+    // WiFi.begin(ssid, password);
+    // while (WiFi.status() != WL_CONNECTED) { // Wait for the Wi-Fi to connect
+    //     delay(500);
+    //     Serial.print('.');
+    // }
+    // Serial.println('\n');
+    // Serial.println("Connection established");
+    // Serial.print("IP address:\t");
+    // Serial.println(WiFi.localIP());
 
     // Connect to Senseair S8
     s8.begin(9600);
@@ -183,6 +196,13 @@ void setup() {
 
     // Connect to PMSx003
     pms.init();
+
+    // Draw PROGMEM const unsigned char air_logo[] = {
+    tft.setTextSize(4);
+    tft.drawXBitmap(0+30,   13+60, air_logo, air_width, air_height, TFT_WHITE);
+    tft.drawXBitmap(120+30, 13+60, humi_logo, humi_width, humi_height, TFT_WHITE);
+    tft.drawXBitmap(0+25,   13+60+60+13+40, press_logo, press_width, press_height, TFT_WHITE);
+    tft.drawXBitmap(120+30, 13+60+60+13+40, co2_logo, co2_width, co2_height, TFT_WHITE);
 }
 
 void loop() {
@@ -213,12 +233,28 @@ void loop() {
   unsigned long co2val = getValue(response);
   Serial.print("CO2 ppm = "); Serial.println(co2val);
 
+  // Отправим данные на экран
+  tft.drawFloat((temp_sht + temp_bme) / 2, 1, 0+13,   36);
+  tft.drawFloat((humi_sht + humi_bme) / 2, 1, 120+13, 36);
+  tft.drawFloat(pres_bme,                  0, 20,     13+60+60+13);
+  tft.drawNumber(co2val,                      140,    13+60+60+13);
+
+  tft.setTextSize(2);
+  char buffer[40];
+  sprintf(buffer, "PM0.1: %d [ug/m3]", pms.pm01);
+  tft.drawString(buffer, 0+13, 13+60+60+13+40+65);
+  sprintf(buffer, "PM2.5: %d [ug/m3]", pms.pm25);
+  tft.drawString(buffer, 0+13, 13+60+60+13+40+65+21);
+  sprintf(buffer, "PM10:  %d [ug/m3]", pms.pm10);
+  tft.drawString(buffer, 0+13, 13+60+60+13+40+65+21+21);
+  tft.setTextSize(4);
+
   // Отправим данные в PostgreSQL
-  doPg(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, co2val, pms.pm01, pms.pm25, pms.pm10);
+  // doPg(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, co2val, pms.pm01, pms.pm25, pms.pm10);
 
   // Wait 30sec till next read
   Serial.println();
-  delay(30000);
+  delay(10000);
 }
 
 void sendRequest(byte packet[])
