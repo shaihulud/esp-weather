@@ -6,7 +6,6 @@
  Uncomment section starting with: For ESP32 Dev board (only tested with ILI9341 display)
  */
 #include <WiFi.h>
-
 #include "SoftwareSerial.h"
 #include <Adafruit_BME280.h>
 #include "Adafruit_SHT31.h"
@@ -32,11 +31,11 @@ PGconnection conn(&client, 0, 1024, pgbuffer);
 // Sensors config
 Adafruit_BME280 bme;
 Adafruit_SHT31 sht31 = Adafruit_SHT31();
-SerialPM pms(PMSA003, 34, 35); // PMSx003, RX, TX
-SoftwareSerial s8(16,17);  //Sets up a virtual serial port
+SerialPM pms(PMSA003, 34, 33); // PMSx003, RX, TX
+SoftwareSerial s8(16,17);  // Sets up a virtual serial port
 
-byte readCO2[] = {0xFE, 0X44, 0X00, 0X08, 0X02, 0X9F, 0X25};  //Command packet to read Co2
-byte response[] = {0,0,0,0,0,0,0};  //create an array to store the response
+byte readCO2[] = {0xFE, 0X44, 0X00, 0X08, 0X02, 0X9F, 0X25};  // Command packet to read Co2
+byte response[] = {0,0,0,0,0,0,0};  // Create an array to store the response
 
 
 TFT_eSPI tft = TFT_eSPI();
@@ -157,10 +156,6 @@ void setup() {
     tft.setRotation(0);
     tft.fillScreen(TFT_BLACK);
 
-    //SPIFFS.begin(true);  // Will format on the first run after failing to mount
-    //String ssid = getConfig("/wifi-ssid");
-    //String pass = getConfig("/wifi-password");
-
     // Connect to the network
     // WiFi.begin(ssid, password);
     // while (WiFi.status() != WL_CONNECTED) { // Wait for the Wi-Fi to connect
@@ -223,7 +218,6 @@ void loop() {
 
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  //tft.loadFont(AA_FONT_SMALL);
 
   tft.setTextSize(1);
   tft.drawString("Temp:",                     0+13,   2,  4);
@@ -240,18 +234,12 @@ void loop() {
     tft.drawNumber(co2val,                    115,    115, 7);
   }
 
-  tft.setTextSize(2);
-  sprintf(buffer, "PM0.1: %d", pms.pm01);
-  tft.drawString(buffer, 0+13, 13+60+60+13+40+65);
-  sprintf(buffer, "PM2.5: %d", pms.pm25);
-  tft.drawString(buffer, 0+13, 13+60+60+13+40+65+21);
-  sprintf(buffer, "PM10:  %d", pms.pm10);
-  tft.drawString(buffer, 0+13, 13+60+60+13+40+65+21+21);
+  sprintf(buffer, "PM: %d %d %d", pms.pm01, pms.pm25, pms.pm10);
+  tft.drawString(buffer, 5, 178, 4);
 
   // Отправим данные в PostgreSQL
   // doPg(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, co2val, pms.pm01, pms.pm25, pms.pm10);
 
-  // Wait 30sec till next read
   Serial.println();
   delay(10000);
 }
