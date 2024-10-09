@@ -2,7 +2,7 @@ version: "3"
 
 services:
   postgres:
-    image: postgres:13-alpine
+    image: postgres:17-alpine
     container_name: postgres
     restart: always
     ports:
@@ -44,5 +44,5 @@ networks:
     driver: bridge
 
 volumes:
-  postgres-storage:
-  grafana-storage:
+  postgres-storage: {}
+  grafana-storage: {}
