@@ -8,15 +8,14 @@
 #include "SimplePgSQL.h"
 
 
-const char* ssid     = "SSID NAME HERE";
-const char* password = "PASSWORD HERE";
+const char* ssid     = "";
+const char* password = "";
 
-const char* pg_user     = "POSTGRES USER HERE";
-const char* pg_password = "POSTGRES PASSWORD HERE";
+const char* pg_user     = "";
+const char* pg_password = "";
 const char* pg_dbname   = "weather";
 
-
-IPAddress PGIP(192,168,1,5);
+IPAddress PGIP(0,0,0,0);
 WiFiClient client;
 
 char pgbuffer[1024];
@@ -33,7 +32,7 @@ SerialPM pms(PMSA003, 34, 33); // PMSx003, RX, TX
 int pg_status = 0;
 
 // Подсоединяется к PostgreSQL и отправляет в него данные
-void doPg(float temp_bme, float pres_bme, float humi_bme, float temp_sht, float humi_sht, unsigned long co2val, unsigned long pm01, unsigned long pm25, unsigned long pm10)
+void doPg(float temp_bme, float pres_bme, float humi_bme, float temp_sht, float humi_sht, unsigned long pm01, unsigned long pm25, unsigned long pm10)
 {
     char *msg;
     int rc;
@@ -59,14 +58,14 @@ void doPg(float temp_bme, float pres_bme, float humi_bme, float temp_sht, float 
         return;
     }
 
-status_2:
+  status_2:
     if (pg_status == 2) {
         char query[90];
         snprintf_P(
           query,
           sizeof(query),
-          PSTR("INSERT INTO room_mine VALUES (DEFAULT, %.1f, %.1f, %.1f, %.1f, %.1f, %u, %u, %u, %u)"),
-          temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, co2val, pm01, pm25, pm10
+          PSTR("INSERT INTO outside VALUES (DEFAULT, %.1f, %.1f, %.1f, %.1f, %.1f, %u, %u, %u)"),
+          temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, pm01, pm25, pm10
         );
 
         if (conn.execute(query, false)) goto error;
@@ -125,7 +124,7 @@ status_2:
     }
     return;
 
-error:
+  error:
     msg = conn.getMessage();
     if (msg) Serial.println(msg);
     else Serial.println("UNKNOWN ERROR");
@@ -141,15 +140,15 @@ void setup() {
     Serial.begin(9600);
 
     // Connect to the network
-    // WiFi.begin(ssid, password);
-    // while (WiFi.status() != WL_CONNECTED) { // Wait for the Wi-Fi to connect
-    //     delay(500);
-    //     Serial.print('.');
-    // }
-    // Serial.println('\n');
-    // Serial.println("Connection established");
-    // Serial.print("IP address:\t");
-    // Serial.println(WiFi.localIP());
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) { // Wait for the Wi-Fi to connect
+        delay(500);
+        Serial.print('.');
+    }
+    Serial.println('\n');
+    Serial.println("Connection established");
+    Serial.print("IP address:\t");
+    Serial.println(WiFi.localIP());
 
     // Connect to SHT31
     if (!sht31.begin(0x44)) {
@@ -190,8 +189,8 @@ void loop() {
   }
 
   // Отправим данные в PostgreSQL
-  // doPg(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, co2val, pms.pm01, pms.pm25, pms.pm10);
+  doPg(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, pms.pm01, pms.pm25, pms.pm10);
 
-  Serial.println();
-  delay(10000);
+  if (pg_status >= 2) delay(30000);
+  else delay(10000);
 }

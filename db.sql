@@ -12,11 +12,29 @@ CREATE TABLE room_mine (
 );
 CREATE UNIQUE INDEX dt_idx ON room_mine (dt);
 
-CREATE ROLE esp32_1 WITH LOGIN, PASSWORD '';
-GRANT INSERT ON room_mine TO esp32_1;
+CREATE TABLE outside (
+    dt              timestamp (0) with time zone DEFAULT NOW(),
+    temperature_bme real,
+    pressure_bme    real,
+    humidity_bme    real,
+    temperature_sht real,
+    humidity_sht    real,
+    pm01            smallint,
+    pm25            smallint,
+    pm10            smallint
+);
+CREATE UNIQUE INDEX outside_dt_idx ON outside (dt);
 
-CREATE ROLE grafana WITH LOGIN, PASSWORD '';
+CREATE ROLE esp32_1 WITH LOGIN PASSWORD '';
+GRANT INSERT ON room_mine TO esp32_1;
+GRANT SELECT ON outside TO esp32_1;
+
+CREATE ROLE esp32_2 WITH LOGIN PASSWORD '';
+GRANT INSERT ON outside TO esp32_2;
+
+CREATE ROLE grafana WITH LOGIN PASSWORD '';
 GRANT SELECT ON room_mine TO grafana;
+GRANT SELECT ON outside TO grafana;
 
 
 CREATE TABLE exchange_rate (
