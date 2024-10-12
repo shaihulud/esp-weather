@@ -14,15 +14,14 @@
 #include <TFT_eSPI.h>
 
 
-const char* ssid     = "SSID NAME HERE";
-const char* password = "PASSWORD HERE";
+const char* ssid     = "";
+const char* password = "";
 
-const char* pg_user     = "POSTGRES USER HERE";
-const char* pg_password = "POSTGRES PASSWORD HERE";
+const char* pg_user     = "";
+const char* pg_password = "";
 const char* pg_dbname   = "weather";
 
-
-IPAddress PGIP(192,168,1,5);
+IPAddress PGIP(0,0,0,0);
 WiFiClient client;
 
 char pgbuffer[1024];
@@ -71,7 +70,7 @@ void doPg(float temp_bme, float pres_bme, float humi_bme, float temp_sht, float 
         return;
     }
 
-status_2:
+  status_2:
     if (pg_status == 2) {
         char query[90];
         snprintf_P(
@@ -137,7 +136,7 @@ status_2:
     }
     return;
 
-error:
+  error:
     msg = conn.getMessage();
     if (msg) Serial.println(msg);
     else Serial.println("UNKNOWN ERROR");
@@ -155,17 +154,20 @@ void setup() {
     tft.init();
     tft.setRotation(0);
     tft.fillScreen(TFT_BLACK);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.setTextSize(1);
+    tft.drawString("Connecting to WiFi", 13, 158, 4);
 
     // Connect to the network
-    // WiFi.begin(ssid, password);
-    // while (WiFi.status() != WL_CONNECTED) { // Wait for the Wi-Fi to connect
-    //     delay(500);
-    //     Serial.print('.');
-    // }
-    // Serial.println('\n');
-    // Serial.println("Connection established");
-    // Serial.print("IP address:\t");
-    // Serial.println(WiFi.localIP());
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) { // Wait for the Wi-Fi to connect
+        delay(500);
+        Serial.print('.');
+    }
+    Serial.println('\n');
+    Serial.println("Connection established");
+    Serial.print("IP address:\t");
+    Serial.println(WiFi.localIP());
 
     // Connect to Senseair S8
     s8.begin(9600);
@@ -222,26 +224,28 @@ void loop() {
   tft.setTextSize(1);
   tft.drawString("Temp:",                     0+13,   2,  4);
   tft.drawString("Humi:",                     120+23, 2,  4);
-  tft.drawFloat((temp_sht + temp_bme) / 2, 0, 0,      27, 7);
-  tft.drawFloat((humi_sht + humi_bme) / 2, 0, 120+10, 27, 7);
+  tft.drawFloat((temp_sht + temp_bme) / 2, 1, 0,      27, 6);
+  tft.drawFloat((humi_sht + humi_bme) / 2, 1, 120+10, 27, 6);
 
-  tft.drawString("Press:",                    0+13,   90, 4);
-  tft.drawString("CO2:",                      120+23, 90, 4);
-  tft.drawFloat(pres_bme,                  0, 0,      115, 7);
+  tft.drawString("Press:",                    0+13,   80, 4);
+  tft.drawString("CO2:",                      120+23, 80, 4);
+  tft.drawFloat(pres_bme,                  0, 0,      105, 6);
   if (co2val < 1000) {
-    tft.drawNumber(co2val,                    120+10, 115, 7);
+    tft.drawNumber(co2val,                    120+10, 105, 6);
   } else {
-    tft.drawNumber(co2val,                    115,    115, 7);
+    tft.drawNumber(co2val,                    115,    105, 6);
   }
 
   sprintf(buffer, "PM: %d %d %d", pms.pm01, pms.pm25, pms.pm10);
-  tft.drawString(buffer, 5, 178, 4);
+  tft.drawString(buffer, 5, 158, 4);
 
   // Отправим данные в PostgreSQL
-  // doPg(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, co2val, pms.pm01, pms.pm25, pms.pm10);
+  doPg(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, co2val, pms.pm01, pms.pm25, pms.pm10);
 
   Serial.println();
-  delay(10000);
+
+  if (pg_status >= 2) delay(30000);
+  else delay(10000);
 }
 
 void sendRequest(byte packet[])
