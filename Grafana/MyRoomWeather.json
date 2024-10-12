@@ -3,23 +3,180 @@
     "list": [
       {
         "builtIn": 1,
-        "datasource": "-- Grafana --",
+        "datasource": {
+          "type": "datasource",
+          "uid": "grafana"
+        },
         "enable": true,
         "hide": true,
         "iconColor": "rgba(0, 211, 255, 1)",
         "name": "Annotations & Alerts",
         "type": "dashboard"
+      },
+      {
+        "datasource": {
+          "type": "datasource",
+          "uid": "grafana"
+        },
+        "enable": true,
+        "filter": {
+          "exclude": false,
+          "ids": [
+            3
+          ]
+        },
+        "hide": true,
+        "iconColor": "gray",
+        "name": "T1",
+        "target": {
+          "queryType": "timeRegions",
+          "refId": "Anno",
+          "timeRegion": {
+            "from": "23:00",
+            "timezone": "utc",
+            "to": "08:00"
+          }
+        }
+      },
+      {
+        "datasource": {
+          "type": "datasource",
+          "uid": "grafana"
+        },
+        "enable": true,
+        "filter": {
+          "exclude": false,
+          "ids": [
+            13
+          ]
+        },
+        "hide": true,
+        "iconColor": "gray",
+        "name": "T1",
+        "target": {
+          "queryType": "timeRegions",
+          "refId": "Anno",
+          "timeRegion": {
+            "from": "23:00",
+            "timezone": "utc",
+            "to": "08:00"
+          }
+        }
+      },
+      {
+        "datasource": {
+          "type": "datasource",
+          "uid": "grafana"
+        },
+        "enable": true,
+        "filter": {
+          "exclude": false,
+          "ids": [
+            5
+          ]
+        },
+        "hide": true,
+        "iconColor": "gray",
+        "name": "T1",
+        "target": {
+          "queryType": "timeRegions",
+          "refId": "Anno",
+          "timeRegion": {
+            "from": "23:00",
+            "timezone": "utc",
+            "to": "08:00"
+          }
+        }
+      },
+      {
+        "datasource": {
+          "type": "datasource",
+          "uid": "grafana"
+        },
+        "enable": true,
+        "filter": {
+          "exclude": false,
+          "ids": [
+            13
+          ]
+        },
+        "hide": true,
+        "iconColor": "gray",
+        "name": "T1",
+        "target": {
+          "queryType": "timeRegions",
+          "refId": "Anno",
+          "timeRegion": {
+            "from": "23:00",
+            "timezone": "utc",
+            "to": "08:00"
+          }
+        }
+      },
+      {
+        "datasource": {
+          "type": "datasource",
+          "uid": "grafana"
+        },
+        "enable": true,
+        "filter": {
+          "exclude": false,
+          "ids": [
+            2
+          ]
+        },
+        "hide": true,
+        "iconColor": "gray",
+        "name": "T1",
+        "target": {
+          "queryType": "timeRegions",
+          "refId": "Anno",
+          "timeRegion": {
+            "from": "23:00",
+            "timezone": "utc",
+            "to": "08:00"
+          }
+        }
+      },
+      {
+        "datasource": {
+          "type": "datasource",
+          "uid": "grafana"
+        },
+        "enable": true,
+        "filter": {
+          "exclude": false,
+          "ids": [
+            10
+          ]
+        },
+        "hide": true,
+        "iconColor": "gray",
+        "name": "T1",
+        "target": {
+          "queryType": "timeRegions",
+          "refId": "Anno",
+          "timeRegion": {
+            "from": "23:00",
+            "timezone": "utc",
+            "to": "08:00"
+          }
+        }
       }
     ]
   },
   "editable": true,
-  "gnetId": null,
+  "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 2,
+  "id": 1,
   "links": [],
+  "liveNow": false,
   "panels": [
     {
-      "datasource": null,
+      "datasource": {
+        "type": "postgres",
+        "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -50,8 +207,8 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 5,
-        "w": 6,
+        "h": 4,
+        "w": 4,
         "x": 0,
         "y": 0
       },
@@ -71,9 +228,13 @@
         "text": {},
         "textMode": "value_and_name"
       },
-      "pluginVersion": "7.5.3",
+      "pluginVersion": "10.1.1",
       "targets": [
         {
+          "datasource": {
+            "type": "postgres",
+            "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+          },
           "format": "time_series",
           "group": [],
           "metricColumn": "none",
@@ -104,7 +265,10 @@
       "type": "stat"
     },
     {
-      "datasource": null,
+      "datasource": {
+        "type": "postgres",
+        "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -138,7 +302,7 @@
               },
               {
                 "color": "red",
-                "value": 55
+                "value": 60
               }
             ]
           },
@@ -147,9 +311,9 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 5,
-        "w": 6,
-        "x": 6,
+        "h": 4,
+        "w": 4,
+        "x": 5,
         "y": 0
       },
       "id": 8,
@@ -168,9 +332,13 @@
         "text": {},
         "textMode": "value_and_name"
       },
-      "pluginVersion": "7.5.3",
+      "pluginVersion": "10.1.1",
       "targets": [
         {
+          "datasource": {
+            "type": "postgres",
+            "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+          },
           "format": "time_series",
           "group": [],
           "metricColumn": "none",
@@ -201,7 +369,10 @@
       "type": "stat"
     },
     {
-      "datasource": null,
+      "datasource": {
+        "type": "postgres",
+        "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -231,9 +402,9 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 5,
-        "w": 6,
-        "x": 12,
+        "h": 4,
+        "w": 5,
+        "x": 10,
         "y": 0
       },
       "id": 9,
@@ -252,9 +423,13 @@
         "text": {},
         "textMode": "value_and_name"
       },
-      "pluginVersion": "7.5.3",
+      "pluginVersion": "10.1.1",
       "targets": [
         {
+          "datasource": {
+            "type": "postgres",
+            "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+          },
           "format": "time_series",
           "group": [],
           "metricColumn": "none",
@@ -285,97 +460,75 @@
       "type": "stat"
     },
     {
-      "alert": {
-        "alertRuleTags": {},
-        "conditions": [
-          {
-            "evaluator": {
-              "params": [
-                72.3
-              ],
-              "type": "lt"
-            },
-            "operator": {
-              "type": "and"
-            },
-            "query": {
-              "params": [
-                "currency_usd",
-                "1m",
-                "now"
-              ]
-            },
-            "reducer": {
-              "params": [],
-              "type": "last"
-            },
-            "type": "query"
-          }
-        ],
-        "executionErrorState": "alerting",
-        "for": "0m",
-        "frequency": "1s",
-        "handler": 1,
-        "message": "USD упал ниже 72.3 !!!",
-        "name": "Curency alert",
-        "noDataState": "keep_state",
-        "notifications": [
-          {
-            "uid": "cQv9e7W7k"
-          }
-        ]
+      "datasource": {
+        "type": "postgres",
+        "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
       },
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": null,
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1,
+          "displayName": "Temperature:",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "#EAB839",
+                "value": 26
+              },
+              {
+                "color": "red",
+                "value": 28
+              }
+            ]
+          },
+          "unit": "celsius"
+        },
         "overrides": []
       },
-      "fill": 1,
-      "fillGradient": 0,
       "gridPos": {
-        "h": 5,
-        "w": 6,
-        "x": 18,
+        "h": 4,
+        "w": 4,
+        "x": 15,
         "y": 0
       },
-      "hiddenSeries": false,
-      "id": 4,
-      "legend": {
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "nullPointMode": "null",
+      "id": 14,
       "options": {
-        "alertThreshold": true
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "text": {},
+        "textMode": "value_and_name"
       },
-      "percentage": false,
-      "pluginVersion": "7.5.3",
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
+      "pluginVersion": "10.1.1",
       "targets": [
         {
+          "datasource": {
+            "type": "postgres",
+            "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+          },
+          "editorMode": "code",
           "format": "time_series",
           "group": [],
           "metricColumn": "none",
           "rawQuery": true,
-          "rawSql": "SELECT dt as \"time\", \"value\" AS usd\nFROM exchange_rate\nWHERE $__timeFilter(dt) AND currency='USD'\nORDER BY dt ASC",
-          "refId": "currency_usd",
+          "rawSql": "SELECT dt AS \"time\", (temperature_bme + temperature_sht) / 2.0 AS \"value\" FROM outside ORDER BY dt DESC LIMIT 1",
+          "refId": "temperature_current",
           "select": [
             [
               {
@@ -386,6 +539,23 @@
               }
             ]
           ],
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          },
           "timeColumn": "time",
           "where": [
             {
@@ -396,120 +566,218 @@
           ]
         }
       ],
-      "thresholds": [
-        {
-          "colorMode": "critical",
-          "fill": true,
-          "line": true,
-          "op": "lt",
-          "value": 72.3,
-          "visible": true
-        }
-      ],
-      "timeFrom": null,
-      "timeRegions": [
-        {
-          "$$hashKey": "object:247",
-          "colorMode": "gray",
-          "fill": true,
-          "fillColor": "rgba(234, 112, 112, 0.12)",
-          "from": "23:00",
-          "line": false,
-          "lineColor": "rgba(237, 46, 24, 0.60)",
-          "op": "time",
-          "to": "08:00"
-        }
-      ],
-      "timeShift": null,
-      "title": "Curency",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
       "transparent": true,
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "$$hashKey": "object:251",
-          "decimals": 4,
-          "format": "currencyRUB",
-          "label": "",
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "$$hashKey": "object:252",
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": false
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
+      "type": "stat"
     },
     {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": null,
+      "datasource": {
+        "type": "postgres",
+        "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+      },
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1,
+          "displayName": "Humidity:",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 20
+              },
+              {
+                "color": "green",
+                "value": 30
+              },
+              {
+                "color": "#EAB839",
+                "value": 50
+              },
+              {
+                "color": "red",
+                "value": 60
+              }
+            ]
+          },
+          "unit": "humidity"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "id": 15,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "text": {},
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "10.1.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "group": [],
+          "metricColumn": "none",
+          "rawQuery": true,
+          "rawSql": "SELECT dt AS \"time\", (humidity_bme + humidity_sht) / 2.0 AS \"value\" FROM outside ORDER BY dt DESC LIMIT 1",
+          "refId": "humidity_current",
+          "select": [
+            [
+              {
+                "params": [
+                  "value"
+                ],
+                "type": "column"
+              }
+            ]
+          ],
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          },
+          "timeColumn": "time",
+          "where": [
+            {
+              "name": "$__timeFilter",
+              "params": [],
+              "type": "macro"
+            }
+          ]
+        }
+      ],
+      "transparent": true,
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "max": 30,
+          "min": 15,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
           "unit": "celsius"
         },
         "overrides": []
       },
-      "fill": 1,
-      "fillGradient": 0,
       "gridPos": {
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 5
+        "y": 4
       },
-      "hiddenSeries": false,
       "id": 2,
-      "legend": {
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "nullPointMode": "null",
       "options": {
-        "alertThreshold": true
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
       },
-      "percentage": false,
-      "pluginVersion": "7.5.3",
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
+      "pluginVersion": "10.1.1",
       "targets": [
         {
+          "datasource": {
+            "type": "postgres",
+            "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+          },
           "format": "time_series",
           "group": [],
           "metricColumn": "none",
@@ -536,6 +804,10 @@
           ]
         },
         {
+          "datasource": {
+            "type": "postgres",
+            "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+          },
           "format": "time_series",
           "group": [],
           "hide": false,
@@ -563,110 +835,96 @@
           ]
         }
       ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [
-        {
-          "$$hashKey": "object:187",
-          "colorMode": "gray",
-          "fill": true,
-          "fillColor": "rgba(234, 112, 112, 0.12)",
-          "from": "23:00",
-          "line": false,
-          "lineColor": "rgba(237, 46, 24, 0.60)",
-          "op": "time",
-          "to": "08:00"
-        }
-      ],
-      "timeShift": null,
       "title": "Temperature",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
       "transparent": true,
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "$$hashKey": "object:101",
-          "format": "celsius",
-          "label": null,
-          "logBase": 1,
-          "max": "30",
-          "min": "15",
-          "show": true
-        },
-        {
-          "$$hashKey": "object:102",
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
+      "type": "timeseries"
     },
     {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": null,
+      "datasource": {
+        "type": "postgres",
+        "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+      },
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 20,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
           "unit": "humidity"
         },
         "overrides": []
       },
-      "fill": 1,
-      "fillGradient": 0,
       "gridPos": {
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 5
+        "y": 4
       },
-      "hiddenSeries": false,
       "id": 10,
-      "legend": {
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "nullPointMode": "null",
       "options": {
-        "alertThreshold": true
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
       },
-      "percentage": false,
-      "pluginVersion": "7.5.3",
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
+      "pluginVersion": "10.1.1",
       "targets": [
         {
+          "datasource": {
+            "type": "postgres",
+            "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+          },
           "format": "time_series",
           "group": [],
           "metricColumn": "none",
@@ -693,6 +951,10 @@
           ]
         },
         {
+          "datasource": {
+            "type": "postgres",
+            "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+          },
           "format": "time_series",
           "group": [],
           "hide": false,
@@ -720,62 +982,9 @@
           ]
         }
       ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [
-        {
-          "$$hashKey": "object:247",
-          "colorMode": "gray",
-          "fill": true,
-          "fillColor": "rgba(234, 112, 112, 0.12)",
-          "from": "23:00",
-          "line": false,
-          "lineColor": "rgba(237, 46, 24, 0.60)",
-          "op": "time",
-          "to": "08:00"
-        }
-      ],
-      "timeShift": null,
       "title": "Humidity",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
       "transparent": true,
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "$$hashKey": "object:251",
-          "decimals": null,
-          "format": "humidity",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": "20",
-          "show": true
-        },
-        {
-          "$$hashKey": "object:252",
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": false
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
+      "type": "timeseries"
     },
     {
       "alert": {
@@ -818,53 +1027,90 @@
           }
         ]
       },
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": null,
+      "datasource": {
+        "type": "postgres",
+        "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+      },
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "line+area"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 900
+              }
+            ]
+          },
           "unit": "ppt"
         },
         "overrides": []
       },
-      "fill": 1,
-      "fillGradient": 0,
       "gridPos": {
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 14
+        "y": 13
       },
-      "hiddenSeries": false,
       "id": 5,
-      "legend": {
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "nullPointMode": "null",
       "options": {
-        "alertThreshold": true
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
       },
-      "percentage": false,
-      "pluginVersion": "7.5.3",
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
+      "pluginVersion": "10.1.1",
       "targets": [
         {
+          "datasource": {
+            "type": "postgres",
+            "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+          },
           "format": "time_series",
           "group": [],
           "metricColumn": "none",
@@ -891,117 +1137,96 @@
           ]
         }
       ],
-      "thresholds": [
-        {
-          "colorMode": "critical",
-          "fill": true,
-          "line": true,
-          "op": "gt",
-          "value": 900,
-          "visible": true
-        }
-      ],
-      "timeFrom": null,
-      "timeRegions": [
-        {
-          "$$hashKey": "object:296",
-          "colorMode": "gray",
-          "fill": true,
-          "fillColor": "rgba(234, 112, 112, 0.12)",
-          "from": "23:00",
-          "line": false,
-          "lineColor": "rgba(237, 46, 24, 0.60)",
-          "op": "time",
-          "to": "08:00"
-        }
-      ],
-      "timeShift": null,
       "title": "CO2",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
       "transparent": true,
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "$$hashKey": "object:116",
-          "format": "ppt",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "$$hashKey": "object:117",
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
+      "type": "timeseries"
     },
     {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": null,
+      "datasource": {
+        "type": "postgres",
+        "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+      },
       "fieldConfig": {
-        "defaults": {},
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "µg/m3"
+        },
         "overrides": []
       },
-      "fill": 1,
-      "fillGradient": 0,
       "gridPos": {
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 14
+        "y": 13
       },
-      "hiddenSeries": false,
       "id": 13,
-      "legend": {
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "nullPointMode": "null",
       "options": {
-        "alertThreshold": true
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
       },
-      "percentage": false,
-      "pluginVersion": "7.5.3",
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
+      "pluginVersion": "10.1.1",
       "targets": [
         {
+          "datasource": {
+            "type": "postgres",
+            "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+          },
           "format": "time_series",
           "group": [],
           "metricColumn": "none",
@@ -1028,6 +1253,10 @@
           ]
         },
         {
+          "datasource": {
+            "type": "postgres",
+            "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+          },
           "format": "time_series",
           "group": [],
           "hide": false,
@@ -1055,6 +1284,10 @@
           ]
         },
         {
+          "datasource": {
+            "type": "postgres",
+            "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+          },
           "format": "time_series",
           "group": [],
           "hide": false,
@@ -1082,111 +1315,94 @@
           ]
         }
       ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [
-        {
-          "$$hashKey": "object:247",
-          "colorMode": "gray",
-          "fill": true,
-          "fillColor": "rgba(234, 112, 112, 0.12)",
-          "from": "23:00",
-          "line": false,
-          "lineColor": "rgba(237, 46, 24, 0.60)",
-          "op": "time",
-          "to": "08:00"
-        }
-      ],
-      "timeShift": null,
       "title": "Particulates",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
       "transparent": true,
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "$$hashKey": "object:251",
-          "decimals": null,
-          "format": "µg/m3",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": "0",
-          "show": true
-        },
-        {
-          "$$hashKey": "object:252",
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": false
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
+      "type": "timeseries"
     },
     {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": null,
+      "datasource": {
+        "type": "postgres",
+        "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+      },
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
           "unit": "mm Hg"
         },
         "overrides": []
       },
-      "fill": 1,
-      "fillGradient": 0,
       "gridPos": {
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 23
+        "y": 22
       },
-      "hiddenSeries": false,
       "id": 3,
-      "legend": {
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "nullPointMode": "null",
       "options": {
-        "alertThreshold": true
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
       },
-      "percentage": false,
-      "pluginVersion": "7.5.3",
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
+      "pluginVersion": "10.1.1",
       "targets": [
         {
+          "datasource": {
+            "type": "postgres",
+            "uid": "a0ea75d2-3444-4210-9153-719a9849f899"
+          },
           "format": "time_series",
           "group": [],
           "metricColumn": "none",
@@ -1213,65 +1429,13 @@
           ]
         }
       ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [
-        {
-          "$$hashKey": "object:106",
-          "colorMode": "gray",
-          "fill": true,
-          "fillColor": "rgba(234, 112, 112, 0.12)",
-          "from": "23:00",
-          "line": false,
-          "lineColor": "rgba(237, 46, 24, 0.60)",
-          "op": "time",
-          "to": "08:00"
-        }
-      ],
-      "timeShift": null,
       "title": "Pressure",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
       "transparent": true,
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "$$hashKey": "object:58",
-          "format": "mm Hg",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        },
-        {
-          "$$hashKey": "object:59",
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": false
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
+      "type": "timeseries"
     }
   ],
   "refresh": "30s",
-  "schemaVersion": 27,
+  "schemaVersion": 38,
   "style": "dark",
   "tags": [],
   "templating": {
@@ -1285,5 +1449,6 @@
   "timezone": "",
   "title": "My Room Weather",
   "uid": "CK6Bi5uMz",
-  "version": 35
+  "version": 4,
+  "weekStart": ""
 }
