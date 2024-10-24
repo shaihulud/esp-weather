@@ -26,10 +26,73 @@ Adafruit_BME280 bme;
 Adafruit_SHT31 sht31 = Adafruit_SHT31();
 SerialPM pms(PMSA003, 34, 33); // PMSx003, RX, TX
 
-//#define LOOP_PERIOD 35 // Display updates every 35 ms
-
-
 int pg_status = 0;
+
+
+void setup() {
+    Serial.begin(9600);
+
+    // Connect to the network
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) { // Wait for the Wi-Fi to connect
+        delay(500);
+        Serial.print('.');
+    }
+    Serial.println('\n');
+    Serial.println("Connection established");
+    Serial.print("IP address:\t");
+    Serial.println(WiFi.localIP());
+
+    // Connect to SHT31
+    if (!sht31.begin(0x44)) {
+        Serial.println("Couldn't find SHT31");
+    }
+
+    // Connect to BME280
+    if (!bme.begin(0x76)) {
+        Serial.println("Could not find a valid BME280 sensor, check wiring, address, sensor ID!");
+        Serial.print("SensorID was: 0x"); Serial.println(bme.sensorID(), 16);
+    }
+
+    // Connect to PMSx003
+    pms.init();
+}
+
+void loop() {
+  // SHT31
+  float temp_sht = sht31.readTemperature();
+  float humi_sht = sht31.readHumidity();
+
+  // BME280
+  float temp_bme = bme.readTemperature();
+  float humi_bme = bme.readHumidity();
+  float pres_bme = bme.readPressure() / 133.322F;
+
+  // PMSx003
+  pms.read();
+
+    // Отправим данные в Serial
+  logSerial(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, pms.pm01, pms.pm25, pms.pm10);
+
+  // Отправим данные в PostgreSQL
+  doPg(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, pms.pm01, pms.pm25, pms.pm10);
+
+  if (pg_status >= 2) delay(30000);
+  else delay(10000);
+}
+
+void logSerial(float temp_bme, float pres_bme, float humi_bme, float temp_sht, float humi_sht, unsigned long pm01, unsigned long pm25, unsigned long pm10)
+{
+  Serial.print("Temp SHT31:  "); Serial.print(temp_sht); Serial.println(" *C");
+  Serial.print("Hum SHT31:   "); Serial.print(humi_sht); Serial.println(" %");
+  Serial.print("Temp BME280: "); Serial.print(temp_bme); Serial.println(" *C");
+  Serial.print("Hum BME280:  "); Serial.print(humi_bme); Serial.println(" %");
+  Serial.print("Press BME280: "); Serial.println(pres_bme);
+  Serial.print(F("PM0.1: "));Serial.print(pm01);Serial.println(F(" [ug/m3]"));
+  Serial.print(F("PM2.5: "));Serial.print(pm25);Serial.println(F(" [ug/m3]"));
+  Serial.print(F("PM10:  ")) ;Serial.print(pm10);Serial.println(F(" [ug/m3]"));
+  Serial.println();
+}
 
 // Подсоединяется к PostgreSQL и отправляет в него данные
 void doPg(float temp_bme, float pres_bme, float humi_bme, float temp_sht, float humi_sht, unsigned long pm01, unsigned long pm25, unsigned long pm10)
@@ -133,64 +196,4 @@ void doPg(float temp_bme, float pres_bme, float humi_bme, float temp_sht, float 
         pg_status = -1;
     }
     Serial.print("Status:");Serial.println(pg_status);
-}
-
-
-void setup() {
-    Serial.begin(9600);
-
-    // Connect to the network
-    WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) { // Wait for the Wi-Fi to connect
-        delay(500);
-        Serial.print('.');
-    }
-    Serial.println('\n');
-    Serial.println("Connection established");
-    Serial.print("IP address:\t");
-    Serial.println(WiFi.localIP());
-
-    // Connect to SHT31
-    if (!sht31.begin(0x44)) {
-        Serial.println("Couldn't find SHT31");
-    }
-
-    // Connect to BME280
-    if (!bme.begin(0x76)) {
-        Serial.println("Could not find a valid BME280 sensor, check wiring, address, sensor ID!");
-        Serial.print("SensorID was: 0x"); Serial.println(bme.sensorID(), 16);
-    }
-
-    // Connect to PMSx003
-    pms.init();
-}
-
-void loop() {
-  // SHT31
-  float temp_sht = sht31.readTemperature();
-  float humi_sht = sht31.readHumidity();
-  Serial.print("Temp SHT31:  "); Serial.print(temp_sht); Serial.println(" *C");
-  Serial.print("Hum SHT31:   "); Serial.print(humi_sht); Serial.println(" %");
-
-  // BME280
-  float temp_bme = bme.readTemperature();
-  float humi_bme = bme.readHumidity();
-  float pres_bme = bme.readPressure() / 133.322F;
-  Serial.print("Temp BME280: "); Serial.print(temp_bme); Serial.println(" *C");
-  Serial.print("Hum BME280:  "); Serial.print(humi_bme); Serial.println(" %");
-  Serial.print("Press BME280: "); Serial.println(pres_bme);
-
-  // PMSx003
-  pms.read();
-  if (pms) {
-      Serial.print(F("PM0.1: "));Serial.print(pms.pm01);Serial.println(F(" [ug/m3]"));
-      Serial.print(F("PM2.5: "));Serial.print(pms.pm25);Serial.println(F(" [ug/m3]"));
-      Serial.print(F("PM10:  ")) ;Serial.print(pms.pm10);Serial.println(F(" [ug/m3]"));
-  }
-
-  // Отправим данные в PostgreSQL
-  doPg(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, pms.pm01, pms.pm25, pms.pm10);
-
-  if (pg_status >= 2) delay(30000);
-  else delay(10000);
 }
