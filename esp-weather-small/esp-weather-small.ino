@@ -1,6 +1,3 @@
-/*
-
- */
 #include <WiFi.h>
 #include <Adafruit_BME280.h>
 #include "Adafruit_SHT31.h"
@@ -15,7 +12,12 @@ const char* pg_user     = "";
 const char* pg_password = "";
 const char* pg_dbname   = "weather";
 
-IPAddress PGIP(0,0,0,0);
+const uint8_t PMS_RX_PIN = 34;
+const uint8_t PMS_TX_PIN = 33;
+const uint8_t SHT31_ADDR = 0x44;
+const uint8_t BME280_ADDR = 0x76;
+
+IPAddress PGIP(0, 0, 0, 0);
 WiFiClient client;
 
 char pgbuffer[1024];
@@ -24,7 +26,7 @@ PGconnection conn(&client, 0, 1024, pgbuffer);
 // Sensors config
 Adafruit_BME280 bme;
 Adafruit_SHT31 sht31 = Adafruit_SHT31();
-SerialPM pms(PMSA003, 34, 33); // PMSx003, RX, TX
+SerialPM pms(PMSA003, PMS_RX_PIN, PMS_TX_PIN);
 
 int pg_status = 0;
 
@@ -32,26 +34,12 @@ int pg_status = 0;
 void setup() {
     Serial.begin(9600);
 
-    // Connect to the network
-    WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) { // Wait for the Wi-Fi to connect
-        delay(500);
-        Serial.print('.');
-    }
-    Serial.println('\n');
-    Serial.println("Connection established");
-    Serial.print("IP address:\t");
-    Serial.println(WiFi.localIP());
+    connectToWiFi();
+    bool sht31Status = initializeSHT31();
+    bool bme280Status = initializeBME280();
 
-    // Connect to SHT31
-    if (!sht31.begin(0x44)) {
-        Serial.println("Couldn't find SHT31");
-    }
-
-    // Connect to BME280
-    if (!bme.begin(0x76)) {
-        Serial.println("Could not find a valid BME280 sensor, check wiring, address, sensor ID!");
-        Serial.print("SensorID was: 0x"); Serial.println(bme.sensorID(), 16);
+    if (!sht31Status || !bme280Status) {
+        Serial.println("WARNING: Some sensors failed to initialize.");
     }
 
     // Connect to PMSx003
@@ -59,39 +47,40 @@ void setup() {
 }
 
 void loop() {
-  // SHT31
-  float temp_sht = sht31.readTemperature();
-  float humi_sht = sht31.readHumidity();
+    // SHT31
+    float temp_sht = sht31.readTemperature();
+    float humi_sht = sht31.readHumidity();
 
-  // BME280
-  float temp_bme = bme.readTemperature();
-  float humi_bme = bme.readHumidity();
-  float pres_bme = bme.readPressure() / 133.322F;
+    // BME280
+    float temp_bme = bme.readTemperature();
+    float humi_bme = bme.readHumidity();
+    float pres_bme = bme.readPressure() / 133.322F;
 
-  // PMSx003
-  pms.read();
+    // PMSx003
+    pms.read();
 
-    // Отправим данные в Serial
-  logSerial(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, pms.pm01, pms.pm25, pms.pm10);
+    // Show data for debugging
+    // logSerial(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, pms.pm01, pms.pm25, pms.pm10);
 
-  // Отправим данные в PostgreSQL
-  doPg(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, pms.pm01, pms.pm25, pms.pm10);
+    // Send to PostgreSQL
+    if (WiFi.status() != WL_CONNECTED) connectToWiFi();
+    if (WiFi.status() == WL_CONNECTED) doPg(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, pms.pm01, pms.pm25, pms.pm10);
 
-  if (pg_status >= 2) delay(30000);
-  else delay(10000);
+    if (pg_status >= 2) delay(30000);
+    else delay(10000);
 }
 
 void logSerial(float temp_bme, float pres_bme, float humi_bme, float temp_sht, float humi_sht, unsigned long pm01, unsigned long pm25, unsigned long pm10)
 {
-  Serial.print("Temp SHT31:  "); Serial.print(temp_sht); Serial.println(" *C");
-  Serial.print("Hum SHT31:   "); Serial.print(humi_sht); Serial.println(" %");
-  Serial.print("Temp BME280: "); Serial.print(temp_bme); Serial.println(" *C");
-  Serial.print("Hum BME280:  "); Serial.print(humi_bme); Serial.println(" %");
-  Serial.print("Press BME280: "); Serial.println(pres_bme);
-  Serial.print(F("PM0.1: "));Serial.print(pm01);Serial.println(F(" [ug/m3]"));
-  Serial.print(F("PM2.5: "));Serial.print(pm25);Serial.println(F(" [ug/m3]"));
-  Serial.print(F("PM10:  ")) ;Serial.print(pm10);Serial.println(F(" [ug/m3]"));
-  Serial.println();
+    Serial.print("Temp SHT31:  "); Serial.print(temp_sht); Serial.println(" *C");
+    Serial.print("Hum SHT31:   "); Serial.print(humi_sht); Serial.println(" %");
+    Serial.print("Temp BME280: "); Serial.print(temp_bme); Serial.println(" *C");
+    Serial.print("Hum BME280:  "); Serial.print(humi_bme); Serial.println(" %");
+    Serial.print("Press BME280: "); Serial.println(pres_bme);
+    Serial.print(F("PM0.1: "));Serial.print(pm01);Serial.println(F(" [ug/m3]"));
+    Serial.print(F("PM2.5: "));Serial.print(pm25);Serial.println(F(" [ug/m3]"));
+    Serial.print(F("PM10:  ")) ;Serial.print(pm10);Serial.println(F(" [ug/m3]"));
+    Serial.println();
 }
 
 // Подсоединяется к PostgreSQL и отправляет в него данные
@@ -125,10 +114,10 @@ void doPg(float temp_bme, float pres_bme, float humi_bme, float temp_sht, float 
     if (pg_status == 2) {
         char query[90];
         snprintf_P(
-          query,
-          sizeof(query),
-          PSTR("INSERT INTO outside VALUES (DEFAULT, %.1f, %.1f, %.1f, %.1f, %.1f, %u, %u, %u)"),
-          temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, pm01, pm25, pm10
+            query,
+            sizeof(query),
+            PSTR("INSERT INTO outside VALUES (DEFAULT, %.1f, %.1f, %.1f, %.1f, %.1f, %u, %u, %u)"),
+            temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, pm01, pm25, pm10
         );
 
         if (conn.execute(query, false)) goto error;
@@ -196,4 +185,53 @@ void doPg(float temp_bme, float pres_bme, float humi_bme, float temp_sht, float 
         pg_status = -1;
     }
     Serial.print("Status:");Serial.println(pg_status);
+}
+
+void connectToWiFi() {
+    WiFi.begin(ssid, password);
+    Serial.print("\nConnecting to Wi-Fi");
+    unsigned long startAttemptTime = millis();
+
+    // Attempt to connect for 15 seconds
+    while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 15000) {
+        Serial.print(".");
+        delay(500);
+    }
+
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("\nFailed to connect to Wi-Fi");
+        // TODO: Handle failed connection attempt
+    } else {
+        Serial.println("\nConnected to Wi-Fi");
+        Serial.print("IP address: ");
+        Serial.println(WiFi.localIP());
+    }
+}
+
+bool initializeSHT31() {
+    Serial.println("Initializing SHT31...");
+    for (int attempt = 1; attempt <= 3; attempt++) {  // Retry up to 3 times
+        if (sht31.begin(SHT31_ADDR)) {
+            Serial.println("SHT31 initialized successfully.");
+            return true;
+        }
+        Serial.printf("SHT31 init attempt %d failed. Retrying...\n", attempt);
+        delay(1000);
+    }
+    Serial.println("ERROR: Failed to initialize SHT31 after multiple attempts.");
+    return false;
+}
+
+bool initializeBME280() {
+    Serial.println("Initializing BME280...");
+    for (int attempt = 1; attempt <= 3; attempt++) {  // Retry up to 3 times
+        if (bme.begin(BME280_ADDR)) {
+            Serial.println("BME280 initialized successfully.");
+            return true;
+        }
+        Serial.printf("BME280 init attempt %d failed. SensorID was: 0x%d. Retrying...\n", bme.sensorID(), attempt);
+        delay(1000);
+    }
+    Serial.println("ERROR: Failed to initialize BME280 after multiple attempts.");
+    return false;
 }
