@@ -4,234 +4,415 @@
 #include <PMserial.h>
 #include "SimplePgSQL.h"
 
+// Configuration constants
+const char* WIFI_SSID = "";
+const char* WIFI_PASSWORD = "";
+const char* PG_USER = "";
+const char* PG_PASSWORD = "";
+const char* PG_DBNAME = "weather";
+const IPAddress PG_IP(0, 0, 0, 0);
 
-const char* ssid     = "";
-const char* password = "";
-
-const char* pg_user     = "";
-const char* pg_password = "";
-const char* pg_dbname   = "weather";
-
+// Hardware configuration
 const uint8_t PMS_RX_PIN = 34;
 const uint8_t PMS_TX_PIN = 33;
 const uint8_t SHT31_ADDR = 0x44;
 const uint8_t BME280_ADDR = 0x76;
 
-IPAddress PGIP(0, 0, 0, 0);
+// Timing constants
+const unsigned long WIFI_CONNECT_TIMEOUT = 15000;
+const unsigned long NORMAL_DELAY = 30000;
+const unsigned long ERROR_DELAY = 10000;
+const unsigned long SENSOR_INIT_DELAY = 1000;
+const uint8_t MAX_INIT_ATTEMPTS = 3;
+
+// Buffer configuration
+// const size_t PG_BUFFER_SIZE = 1024;
+const size_t QUERY_BUFFER_SIZE = 256;
+
+// Database connection states
+enum class DatabaseState {
+    DISCONNECTED,
+    CONNECTING,
+    CONNECTED,
+    EXECUTING_QUERY,
+    PROCESSING_RESULT,
+    ERROR
+};
+
+// Sensor data structure
+struct SensorData {
+    float temp_sht31;
+    float humi_sht31;
+    float temp_bme280;
+    float humi_bme280;
+    float pres_bme280;
+    uint16_t pm01;
+    uint16_t pm25;
+    uint16_t pm10;
+    bool valid;
+};
+
+// Global objects
 WiFiClient client;
+char pgBuffer[PG_BUFFER_SIZE];
+PGconnection conn(&client, 0, PG_BUFFER_SIZE, pgBuffer);
 
-char pgbuffer[1024];
-PGconnection conn(&client, 0, 1024, pgbuffer);
-
-// Sensors config
 Adafruit_BME280 bme;
 Adafruit_SHT31 sht31 = Adafruit_SHT31();
 SerialPM pms(PMSA003, PMS_RX_PIN, PMS_TX_PIN);
 
-int pg_status = 0;
+DatabaseState dbState = DatabaseState::DISCONNECTED;
 
+// Function declarations
+bool initializeWiFi();
+bool initializeSensors();
+bool initializeSHT31();
+bool initializeBME280();
+bool initializePMS();
+SensorData readSensorData();
+bool validateSensorData(const SensorData& data);
+void logSensorData(const SensorData& data);
+bool handleDatabaseConnection();
+bool sendDataToDatabase(const SensorData& data);
+void handleDatabaseError(const char* error);
+void resetDatabaseConnection();
 
 void setup() {
     Serial.begin(9600);
-
-    connectToWiFi();
-    bool sht31Status = initializeSHT31();
-    bool bme280Status = initializeBME280();
-
-    if (!sht31Status || !bme280Status) {
-        Serial.println("WARNING: Some sensors failed to initialize.");
+    Serial.println("\nESP32 Weather Station Starting...");
+    
+    // Initialize WiFi
+    if (!initializeWiFi()) {
+        Serial.println("ERROR: WiFi initialization failed");
     }
-
-    // Connect to PMSx003
-    pms.init();
+    
+    // Initialize sensors
+    if (!initializeSensors()) {
+        Serial.println("WARNING: Some sensors failed to initialize");
+    }
+    
+    Serial.println("Setup complete");
 }
 
 void loop() {
-    // SHT31
-    float temp_sht = sht31.readTemperature();
-    float humi_sht = sht31.readHumidity();
-
-    // BME280
-    float temp_bme = bme.readTemperature();
-    float humi_bme = bme.readHumidity();
-    float pres_bme = bme.readPressure() / 133.322F;
-
-    // PMSx003
-    pms.read();
-
-    // Show data for debugging
-    // logSerial(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, pms.pm01, pms.pm25, pms.pm10);
-
-    // Send to PostgreSQL
-    if (WiFi.status() != WL_CONNECTED) connectToWiFi();
-    if (WiFi.status() == WL_CONNECTED) doPg(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, pms.pm01, pms.pm25, pms.pm10);
-
-    if (pg_status >= 2) delay(30000);
-    else delay(10000);
-}
-
-void logSerial(float temp_bme, float pres_bme, float humi_bme, float temp_sht, float humi_sht, unsigned long pm01, unsigned long pm25, unsigned long pm10)
-{
-    Serial.print("Temp SHT31:  "); Serial.print(temp_sht); Serial.println(" *C");
-    Serial.print("Hum SHT31:   "); Serial.print(humi_sht); Serial.println(" %");
-    Serial.print("Temp BME280: "); Serial.print(temp_bme); Serial.println(" *C");
-    Serial.print("Hum BME280:  "); Serial.print(humi_bme); Serial.println(" %");
-    Serial.print("Press BME280: "); Serial.println(pres_bme);
-    Serial.print(F("PM0.1: "));Serial.print(pm01);Serial.println(F(" [ug/m3]"));
-    Serial.print(F("PM2.5: "));Serial.print(pm25);Serial.println(F(" [ug/m3]"));
-    Serial.print(F("PM10:  ")) ;Serial.print(pm10);Serial.println(F(" [ug/m3]"));
-    Serial.println();
-}
-
-// Подсоединяется к PostgreSQL и отправляет в него данные
-void doPg(float temp_bme, float pres_bme, float humi_bme, float temp_sht, float humi_sht, unsigned long pm01, unsigned long pm25, unsigned long pm10)
-{
-    char *msg;
-    int rc;
-    if (!pg_status) {
-        conn.setDbLogin(PGIP, pg_user, pg_password, pg_dbname, "utf8");
-        pg_status = 1;
-        Serial.println("Status: connecting to PSQL...");
-        return;
+    // Ensure WiFi is connected
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("WiFi disconnected, attempting reconnection...");
+        if (!initializeWiFi()) {
+            Serial.println("WiFi reconnection failed, waiting before retry");
+            delay(ERROR_DELAY);
+            return;
+        }
     }
-
-    if (pg_status == 1) {
-        rc = conn.status();
-        if (rc == CONNECTION_BAD || rc == CONNECTION_NEEDED) {
-            char *c=conn.getMessage();
-            if (c) Serial.println(c);
-            pg_status = -1;
-        }
-        else if (rc == CONNECTION_OK) {
-            pg_status = 2;
-            Serial.println("Status: connected.");
-            goto status_2;
-        }
-        return;
-    }
-
-  status_2:
-    if (pg_status == 2) {
-        char query[90];
-        snprintf_P(
-            query,
-            sizeof(query),
-            PSTR("INSERT INTO outside VALUES (DEFAULT, %.1f, %.1f, %.1f, %.1f, %.1f, %u, %u, %u)"),
-            temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, pm01, pm25, pm10
-        );
-
-        if (conn.execute(query, false)) goto error;
-        pg_status = 3;
-        Serial.print("Status: sending SQL ");Serial.println(query);
-        return;
-    }
-
-    if (pg_status == 3) {
-        rc=conn.getData();
-        int i;
-
-        if (rc < 0) goto error;
-        if (!rc) return;
-
-        if (rc & PG_RSTAT_HAVE_COLUMNS) {
-            Serial.print("Status: ");
-            for (i=0; i < conn.nfields(); i++) {
-                if (i) Serial.print(" | ");
-                Serial.print(conn.getColumn(i));
-            }
-            Serial.println("\n==========");
-        }
-        else if (rc & PG_RSTAT_HAVE_ROW) {
-            Serial.print("Status: ");
-            for (i=0; i < conn.nfields(); i++) {
-                if (i) Serial.print(" | ");
-                msg = conn.getValue(i);
-                if (!msg) msg=(char *)"NULL";
-                Serial.print(msg);
-            }
-            Serial.println();
-        }
-        else if (rc & PG_RSTAT_HAVE_SUMMARY) {
-            Serial.print("Status: ");
-            Serial.print("Rows affected: ");
-            Serial.println(conn.ntuples());
-        }
-        else if (rc & PG_RSTAT_HAVE_MESSAGE) {
-            msg = conn.getMessage();
-            if (msg) {Serial.print("Status: ");Serial.println(msg);}
-        }
-
-        if (rc & PG_RSTAT_READY) {
-            pg_status = 2;
-            Serial.println("Status: ready for the next query.");
-            goto status_2;
+    
+    // Read sensor data
+    SensorData data = readSensorData();
+    
+    // Validate and log data
+    if (validateSensorData(data)) {
+        logSensorData(data);
+        
+        // Send to database
+        if (sendDataToDatabase(data)) {
+            Serial.println("Data sent successfully");
+            delay(NORMAL_DELAY);
         } else {
-            rc=conn.getData();
-            if (rc & PG_RSTAT_READY) {
-                pg_status = 2;
-                Serial.println("Status: ready for the next query.");
-                goto status_2;
-            }
+            Serial.println("Database operation failed");
+            delay(ERROR_DELAY);
         }
+    } else {
+        Serial.println("Invalid sensor data, skipping this cycle");
+        delay(ERROR_DELAY);
     }
-    return;
-
-  error:
-    msg = conn.getMessage();
-    if (msg) Serial.println(msg);
-    else Serial.println("UNKNOWN ERROR");
-    if (conn.status() == CONNECTION_BAD) {
-        Serial.println("Connection is bad");
-        pg_status = -1;
-    }
-    Serial.print("Status:");Serial.println(pg_status);
 }
 
-void connectToWiFi() {
-    WiFi.begin(ssid, password);
-    Serial.print("\nConnecting to Wi-Fi");
-    unsigned long startAttemptTime = millis();
-
-    // Attempt to connect for 15 seconds
-    while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 15000) {
+bool initializeWiFi() {
+    if (WiFi.status() == WL_CONNECTED) {
+        return true;
+    }
+    
+    Serial.println("Connecting to WiFi...");
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    
+    unsigned long startTime = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - startTime < WIFI_CONNECT_TIMEOUT) {
         Serial.print(".");
         delay(500);
     }
-
+    
     if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("\nFailed to connect to Wi-Fi");
-        // TODO: Handle failed connection attempt
-    } else {
-        Serial.println("\nConnected to Wi-Fi");
-        Serial.print("IP address: ");
-        Serial.println(WiFi.localIP());
+        Serial.println("\nWiFi connection failed");
+        return false;
     }
+    
+    Serial.println("\nWiFi connected successfully");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+    return true;
+}
+
+bool initializeSensors() {
+    bool sht31Success = initializeSHT31();
+    bool bme280Success = initializeBME280();
+    bool pmsSuccess = initializePMS();
+    
+    return sht31Success && bme280Success && pmsSuccess;
 }
 
 bool initializeSHT31() {
-    Serial.println("Initializing SHT31...");
-    for (int attempt = 1; attempt <= 3; attempt++) {  // Retry up to 3 times
+    Serial.println("Initializing SHT31 sensor...");
+    
+    for (int attempt = 1; attempt <= MAX_INIT_ATTEMPTS; attempt++) {
         if (sht31.begin(SHT31_ADDR)) {
-            Serial.println("SHT31 initialized successfully.");
+            Serial.println("SHT31 initialized successfully");
             return true;
         }
-        Serial.printf("SHT31 init attempt %d failed. Retrying...\n", attempt);
-        delay(1000);
+        
+        Serial.printf("SHT31 initialization attempt %d failed, retrying...\n", attempt);
+        delay(SENSOR_INIT_DELAY);
     }
-    Serial.println("ERROR: Failed to initialize SHT31 after multiple attempts.");
+    
+    Serial.println("ERROR: SHT31 initialization failed after multiple attempts");
     return false;
 }
 
 bool initializeBME280() {
-    Serial.println("Initializing BME280...");
-    for (int attempt = 1; attempt <= 3; attempt++) {  // Retry up to 3 times
+    Serial.println("Initializing BME280 sensor...");
+    
+    for (int attempt = 1; attempt <= MAX_INIT_ATTEMPTS; attempt++) {
         if (bme.begin(BME280_ADDR)) {
-            Serial.println("BME280 initialized successfully.");
+            Serial.println("BME280 initialized successfully");
             return true;
         }
-        Serial.printf("BME280 init attempt %d failed. SensorID was: 0x%d. Retrying...\n", bme.sensorID(), attempt);
-        delay(1000);
+        
+        Serial.printf("BME280 initialization attempt %d failed (SensorID: 0x%02X), retrying...\n", 
+                     attempt, bme.sensorID());
+        delay(SENSOR_INIT_DELAY);
     }
-    Serial.println("ERROR: Failed to initialize BME280 after multiple attempts.");
+    
+    Serial.println("ERROR: BME280 initialization failed after multiple attempts");
     return false;
+}
+
+bool initializePMS() {
+    Serial.println("Initializing PMS sensor...");
+    pms.init();
+    Serial.println("PMS sensor initialized");
+    return true; // PMS init doesn't return status
+}
+
+SensorData readSensorData() {
+    SensorData data = {0};
+    
+    // Read SHT31 data
+    data.temp_sht31 = sht31.readTemperature();
+    data.humi_sht31 = sht31.readHumidity();
+    
+    // Read BME280 data
+    data.temp_bme280 = bme.readTemperature();
+    data.humi_bme280 = bme.readHumidity();
+    data.pres_bme280 = bme.readPressure() / 133.322F; // Convert Pa to mmHg
+    
+    // Read PMS data
+    pms.read();
+    data.pm01 = pms.pm01;
+    data.pm25 = pms.pm25;
+    data.pm10 = pms.pm10;
+    
+    return data;
+}
+
+bool validateSensorData(const SensorData& data) {
+    // Check for NaN values
+    if (isnan(data.temp_sht31) || isnan(data.humi_sht31) || 
+        isnan(data.temp_bme280) || isnan(data.humi_bme280) || 
+        isnan(data.pres_bme280)) {
+        Serial.println("ERROR: NaN values detected in sensor data");
+        return false;
+    }
+    
+    // Check reasonable ranges
+    if (data.temp_sht31 < -40 || data.temp_sht31 > 85 ||
+        data.temp_bme280 < -40 || data.temp_bme280 > 85) {
+        Serial.println("ERROR: Temperature out of valid range");
+        return false;
+    }
+    
+    if (data.humi_sht31 < 0 || data.humi_sht31 > 100 ||
+        data.humi_bme280 < 0 || data.humi_bme280 > 100) {
+        Serial.println("ERROR: Humidity out of valid range");
+        return false;
+    }
+    
+    if (data.pres_bme280 < 300 || data.pres_bme280 > 1100) {
+        Serial.println("ERROR: Pressure out of valid range");
+        return false;
+    }
+    
+    return true;
+}
+
+void logSensorData(const SensorData& data) {
+    Serial.println("=== Sensor Readings ===");
+    Serial.printf("SHT31  - Temp: %.2f°C, Humidity: %.2f%%\n", data.temp_sht31, data.humi_sht31);
+    Serial.printf("BME280 - Temp: %.2f°C, Humidity: %.2f%%, Pressure: %.2f mmHg\n", 
+                  data.temp_bme280, data.humi_bme280, data.pres_bme280);
+    Serial.printf("PMS    - PM1.0: %d µg/m³, PM2.5: %d µg/m³, PM10: %d µg/m³\n", 
+                  data.pm01, data.pm25, data.pm10);
+    Serial.println("=====================");
+}
+
+bool sendDataToDatabase(const SensorData& data) {
+    switch (dbState) {
+        case DatabaseState::DISCONNECTED:
+            return handleDatabaseConnection();
+            
+        case DatabaseState::CONNECTING:
+            return handleDatabaseConnection();
+            
+        case DatabaseState::CONNECTED:
+            return executeInsertQuery(data);
+            
+        case DatabaseState::EXECUTING_QUERY:
+            return processQueryResult();
+            
+        case DatabaseState::PROCESSING_RESULT:
+            return processQueryResult();
+            
+        case DatabaseState::ERROR:
+            resetDatabaseConnection();
+            return false;
+            
+        default:
+            Serial.println("ERROR: Unknown database state");
+            resetDatabaseConnection();
+            return false;
+    }
+}
+
+bool handleDatabaseConnection() {
+    if (dbState == DatabaseState::DISCONNECTED) {
+        Serial.println("Connecting to PostgreSQL database...");
+        conn.setDbLogin(PG_IP, PG_USER, PG_PASSWORD, PG_DBNAME, "utf8");
+        dbState = DatabaseState::CONNECTING;
+        return false; // Not ready yet
+    }
+    
+    if (dbState == DatabaseState::CONNECTING) {
+        int status = conn.status();
+        
+        if (status == CONNECTION_BAD || status == CONNECTION_NEEDED) {
+            const char* error = conn.getMessage();
+            handleDatabaseError(error ? error : "Connection failed");
+            return false;
+        }
+        
+        if (status == CONNECTION_OK) {
+            Serial.println("Database connected successfully");
+            dbState = DatabaseState::CONNECTED;
+            return true;
+        }
+        
+        // Still connecting
+        return false;
+    }
+    
+    return false;
+}
+
+bool executeInsertQuery(const SensorData& data) {
+    char query[QUERY_BUFFER_SIZE];
+    
+    int result = snprintf(query, sizeof(query),
+        "INSERT INTO outside VALUES (DEFAULT, %.2f, %.2f, %.2f, %.2f, %.2f, %u, %u, %u)",
+        data.temp_bme280, data.pres_bme280, data.humi_bme280, 
+        data.temp_sht31, data.humi_sht31, 
+        data.pm01, data.pm25, data.pm10);
+    
+    if (result >= sizeof(query)) {
+        Serial.println("ERROR: Query buffer overflow");
+        return false;
+    }
+    
+    Serial.printf("Executing query: %s\n", query);
+    
+    if (conn.execute(query, false)) {
+        handleDatabaseError("Query execution failed");
+        return false;
+    }
+    
+    dbState = DatabaseState::EXECUTING_QUERY;
+    return false; // Not complete yet
+}
+
+bool processQueryResult() {
+    int result = conn.getData();
+    
+    if (result < 0) {
+        handleDatabaseError("Error retrieving query result");
+        return false;
+    }
+    
+    if (result == 0) {
+        // Still processing
+        return false;
+    }
+    
+    // Process different types of results
+    if (result & PG_RSTAT_HAVE_COLUMNS) {
+        Serial.print("Columns: ");
+        for (int i = 0; i < conn.nfields(); i++) {
+            if (i > 0) Serial.print(" | ");
+            Serial.print(conn.getColumn(i));
+        }
+        Serial.println();
+    }
+    
+    if (result & PG_RSTAT_HAVE_ROW) {
+        Serial.print("Row: ");
+        for (int i = 0; i < conn.nfields(); i++) {
+            if (i > 0) Serial.print(" | ");
+            const char* value = conn.getValue(i);
+            Serial.print(value ? value : "NULL");
+        }
+        Serial.println();
+    }
+    
+    if (result & PG_RSTAT_HAVE_SUMMARY) {
+        Serial.printf("Query completed - Rows affected: %d\n", conn.ntuples());
+    }
+    
+    if (result & PG_RSTAT_HAVE_MESSAGE) {
+        const char* message = conn.getMessage();
+        if (message) {
+            Serial.printf("Database message: %s\n", message);
+        }
+    }
+    
+    if (result & PG_RSTAT_READY) {
+        Serial.println("Database ready for next query");
+        dbState = DatabaseState::CONNECTED;
+        return true; // Operation complete
+    }
+    
+    // Continue processing
+    return false;
+}
+
+void handleDatabaseError(const char* error) {
+    Serial.printf("Database error: %s\n", error ? error : "Unknown error");
+    
+    if (conn.status() == CONNECTION_BAD) {
+        Serial.println("Database connection lost");
+        resetDatabaseConnection();
+    } else {
+        dbState = DatabaseState::ERROR;
+    }
+}
+
+void resetDatabaseConnection() {
+    Serial.println("Resetting database connection");
+    dbState = DatabaseState::DISCONNECTED;
+    // Note: The SimplePgSQL library may not have an explicit disconnect method
+    // The connection will be reset on next connection attempt
 }
