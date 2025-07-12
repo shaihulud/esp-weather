@@ -80,17 +80,17 @@ void resetDatabaseConnection();
 void setup() {
     Serial.begin(9600);
     Serial.println("\nESP32 Weather Station Starting...");
-    
+
     // Initialize WiFi
     if (!initializeWiFi()) {
         Serial.println("ERROR: WiFi initialization failed");
     }
-    
+
     // Initialize sensors
     if (!initializeSensors()) {
         Serial.println("WARNING: Some sensors failed to initialize");
     }
-    
+
     Serial.println("Setup complete");
 }
 
@@ -104,14 +104,14 @@ void loop() {
             return;
         }
     }
-    
+
     // Read sensor data
     SensorData data = readSensorData();
-    
+
     // Validate and log data
     if (validateSensorData(data)) {
         logSensorData(data);
-        
+
         // Send to database
         if (sendDataToDatabase(data)) {
             Serial.println("Data sent successfully");
@@ -130,21 +130,21 @@ bool initializeWiFi() {
     if (WiFi.status() == WL_CONNECTED) {
         return true;
     }
-    
+
     Serial.println("Connecting to WiFi...");
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    
+
     unsigned long startTime = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - startTime < WIFI_CONNECT_TIMEOUT) {
         Serial.print(".");
         delay(500);
     }
-    
+
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("\nWiFi connection failed");
         return false;
     }
-    
+
     Serial.println("\nWiFi connected successfully");
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
@@ -155,41 +155,41 @@ bool initializeSensors() {
     bool sht31Success = initializeSHT31();
     bool bme280Success = initializeBME280();
     bool pmsSuccess = initializePMS();
-    
+
     return sht31Success && bme280Success && pmsSuccess;
 }
 
 bool initializeSHT31() {
     Serial.println("Initializing SHT31 sensor...");
-    
+
     for (int attempt = 1; attempt <= MAX_INIT_ATTEMPTS; attempt++) {
         if (sht31.begin(SHT31_ADDR)) {
             Serial.println("SHT31 initialized successfully");
             return true;
         }
-        
+
         Serial.printf("SHT31 initialization attempt %d failed, retrying...\n", attempt);
         delay(SENSOR_INIT_DELAY);
     }
-    
+
     Serial.println("ERROR: SHT31 initialization failed after multiple attempts");
     return false;
 }
 
 bool initializeBME280() {
     Serial.println("Initializing BME280 sensor...");
-    
+
     for (int attempt = 1; attempt <= MAX_INIT_ATTEMPTS; attempt++) {
         if (bme.begin(BME280_ADDR)) {
             Serial.println("BME280 initialized successfully");
             return true;
         }
-        
+
         Serial.printf("BME280 initialization attempt %d failed (SensorID: 0x%02X), retrying...\n", 
                      attempt, bme.sensorID());
         delay(SENSOR_INIT_DELAY);
     }
-    
+
     Serial.println("ERROR: BME280 initialization failed after multiple attempts");
     return false;
 }
@@ -203,22 +203,22 @@ bool initializePMS() {
 
 SensorData readSensorData() {
     SensorData data = {0};
-    
+
     // Read SHT31 data
     data.temp_sht31 = sht31.readTemperature();
     data.humi_sht31 = sht31.readHumidity();
-    
+
     // Read BME280 data
     data.temp_bme280 = bme.readTemperature();
     data.humi_bme280 = bme.readHumidity();
     data.pres_bme280 = bme.readPressure() / 133.322F; // Convert Pa to mmHg
-    
+
     // Read PMS data
     pms.read();
     data.pm01 = pms.pm01;
     data.pm25 = pms.pm25;
     data.pm10 = pms.pm10;
-    
+
     return data;
 }
 
@@ -230,25 +230,25 @@ bool validateSensorData(const SensorData& data) {
         Serial.println("ERROR: NaN values detected in sensor data");
         return false;
     }
-    
+
     // Check reasonable ranges
     if (data.temp_sht31 < -40 || data.temp_sht31 > 85 ||
         data.temp_bme280 < -40 || data.temp_bme280 > 85) {
         Serial.println("ERROR: Temperature out of valid range");
         return false;
     }
-    
+
     if (data.humi_sht31 < 0 || data.humi_sht31 > 100 ||
         data.humi_bme280 < 0 || data.humi_bme280 > 100) {
         Serial.println("ERROR: Humidity out of valid range");
         return false;
     }
-    
+
     if (data.pres_bme280 < 300 || data.pres_bme280 > 1100) {
         Serial.println("ERROR: Pressure out of valid range");
         return false;
     }
-    
+
     return true;
 }
 
@@ -265,26 +265,32 @@ void logSensorData(const SensorData& data) {
 bool sendDataToDatabase(const SensorData& data) {
     switch (dbState) {
         case DatabaseState::DISCONNECTED:
+            Serial.print("dbState DatabaseState::DISCONNECTED; ");
             return handleDatabaseConnection();
             
         case DatabaseState::CONNECTING:
+            Serial.print("dbState DatabaseState::CONNECTING; ");
             return handleDatabaseConnection();
             
         case DatabaseState::CONNECTED:
+            Serial.print("dbState DatabaseState::CONNECTED; ");
             return executeInsertQuery(data);
             
         case DatabaseState::EXECUTING_QUERY:
+            Serial.print("dbState DatabaseState::EXECUTING_QUERY; ");
             return processQueryResult();
             
         case DatabaseState::PROCESSING_RESULT:
+            Serial.print("dbState DatabaseState::PROCESSING_RESULT; ");
             return processQueryResult();
             
         case DatabaseState::ERROR:
+            Serial.print("dbState DatabaseState::ERROR; ");
             resetDatabaseConnection();
             return false;
             
         default:
-            Serial.println("ERROR: Unknown database state");
+            Serial.println("dbState ERROR: Unknown database state");
             resetDatabaseConnection();
             return false;
     }
@@ -297,7 +303,7 @@ bool handleDatabaseConnection() {
         dbState = DatabaseState::CONNECTING;
         return false; // Not ready yet
     }
-    
+
     if (dbState == DatabaseState::CONNECTING) {
         int status = conn.status();
         
@@ -316,48 +322,48 @@ bool handleDatabaseConnection() {
         // Still connecting
         return false;
     }
-    
+
     return false;
 }
 
 bool executeInsertQuery(const SensorData& data) {
     char query[QUERY_BUFFER_SIZE];
-    
+
     int result = snprintf(query, sizeof(query),
         "INSERT INTO outside VALUES (DEFAULT, %.2f, %.2f, %.2f, %.2f, %.2f, %u, %u, %u)",
         data.temp_bme280, data.pres_bme280, data.humi_bme280, 
         data.temp_sht31, data.humi_sht31, 
         data.pm01, data.pm25, data.pm10);
-    
+
     if (result >= sizeof(query)) {
         Serial.println("ERROR: Query buffer overflow");
         return false;
     }
-    
+
     Serial.printf("Executing query: %s\n", query);
-    
-    if (conn.execute(query, false)) {
+
+    if (conn.execute(query, false) < 0) {
         handleDatabaseError("Query execution failed");
         return false;
     }
-    
+
     dbState = DatabaseState::EXECUTING_QUERY;
     return false; // Not complete yet
 }
 
 bool processQueryResult() {
     int result = conn.getData();
-    
+
     if (result < 0) {
         handleDatabaseError("Error retrieving query result");
         return false;
     }
-    
+
     if (result == 0) {
         // Still processing
         return false;
     }
-    
+
     // Process different types of results
     if (result & PG_RSTAT_HAVE_COLUMNS) {
         Serial.print("Columns: ");
@@ -367,7 +373,7 @@ bool processQueryResult() {
         }
         Serial.println();
     }
-    
+
     if (result & PG_RSTAT_HAVE_ROW) {
         Serial.print("Row: ");
         for (int i = 0; i < conn.nfields(); i++) {
@@ -377,31 +383,31 @@ bool processQueryResult() {
         }
         Serial.println();
     }
-    
+
     if (result & PG_RSTAT_HAVE_SUMMARY) {
         Serial.printf("Query completed - Rows affected: %d\n", conn.ntuples());
     }
-    
+
     if (result & PG_RSTAT_HAVE_MESSAGE) {
         const char* message = conn.getMessage();
         if (message) {
             Serial.printf("Database message: %s\n", message);
         }
     }
-    
+
     if (result & PG_RSTAT_READY) {
         Serial.println("Database ready for next query");
         dbState = DatabaseState::CONNECTED;
         return true; // Operation complete
     }
-    
+
     // Continue processing
     return false;
 }
 
 void handleDatabaseError(const char* error) {
     Serial.printf("Database error: %s\n", error ? error : "Unknown error");
-    
+
     if (conn.status() == CONNECTION_BAD) {
         Serial.println("Database connection lost");
         resetDatabaseConnection();
