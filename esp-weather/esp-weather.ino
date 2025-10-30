@@ -6,6 +6,7 @@
  Uncomment section starting with: For ESP32 Dev board (only tested with ILI9341 display)
 
  To convert images use PNG to XBM converter.
+ Ex.: https://convertio.co/ru/
  */
 #include <WiFi.h>
 #include "SoftwareSerial.h"
@@ -17,39 +18,92 @@
 
 #include "tiles/neko_cold.h"
 
+// Configuration constants
+const char* WIFI_SSID = "";
+const char* WIFI_PASSWORD = "";
+const char* PG_USER = "";
+const char* PG_PASSWORD = "";
+const char* PG_DBNAME = "weather";
+const IPAddress PG_IP(0, 0, 0, 0);
 
-const char* ssid     = "";
-const char* password = "";
+// Hardware configuration
+const uint8_t PMS_RX_PIN = 34;
+const uint8_t PMS_TX_PIN = 33;
+const uint8_t SHT31_ADDR = 0x44;
+const uint8_t BME280_ADDR = 0x76;
 
-const char* pg_user     = "";
-const char* pg_password = "";
-const char* pg_dbname   = "weather";
+// Timing constants
+const unsigned long WIFI_CONNECT_TIMEOUT = 15000;
+const unsigned long NORMAL_DELAY = 30000;
+const unsigned long ERROR_DELAY = 10000;
+const unsigned long SENSOR_INIT_DELAY = 1000;
+const uint8_t MAX_INIT_ATTEMPTS = 3;
 
-IPAddress PGIP(0,0,0,0);
+// Buffer configuration
+// const size_t PG_BUFFER_SIZE = 1024;
+const size_t QUERY_BUFFER_SIZE = 256;
+
+// Database connection states
+enum class DatabaseState {
+    DISCONNECTED,
+    CONNECTING,
+    CONNECTED,
+    EXECUTING_QUERY,
+    PROCESSING_RESULT,
+    ERROR
+};
+
+// Sensor data structure
+struct SensorData {
+    float temp_sht31;
+    float humi_sht31;
+    float temp_bme280;
+    float humi_bme280;
+    float pres_bme280;
+    uint16_t pm01;
+    uint16_t pm25;
+    uint16_t pm10;
+    bool valid;
+};
+
+// Global objects
 WiFiClient client;
+char pgBuffer[PG_BUFFER_SIZE];
+PGconnection conn(&client, 0, PG_BUFFER_SIZE, pgBuffer);
 
-char pgBuffer[1024];
-PGconnection conn(&client, 0, 1024, pgBuffer);
-int pg_status = 0;
-bool doWrite = true;
-
-// Sensors config
 Adafruit_BME280 bme;
 Adafruit_SHT31 sht31 = Adafruit_SHT31();
-SerialPM pms(PMSA003, 34, 33); // PMSx003, RX, TX
+SerialPM pms(PMSA003, PMS_RX_PIN, PMS_TX_PIN);
 SoftwareSerial s8(16,17);  // Sets up a virtual serial port
-
+int pg_status = 0;
+bool doWrite = true;
 byte readCO2[] = {0xFE, 0X44, 0X00, 0X08, 0X02, 0X9F, 0X25};  // Command packet to read Co2
 byte response[] = {0,0,0,0,0,0,0};  // Create an array to store the response
-
-
 TFT_eSPI tft = TFT_eSPI();
 #define LOOP_PERIOD 35 // Display updates every 35 ms
 
+DatabaseState dbState = DatabaseState::DISCONNECTED;
+
+// Function declarations
+bool initializeWiFi();
+bool initializeSensors();
+bool initializeSHT31();
+bool initializeBME280();
+bool initializePMS();
+bool initializeS8();
+SensorData readSensorData();
+bool validateSensorData(const SensorData& data);
+void logSensorData(const SensorData& data);
+bool handleDatabaseConnection();
+bool sendDataToDatabase(const SensorData& data);
+void handleDatabaseError(const char* error);
+void resetDatabaseConnection();
 
 void setup() {
     Serial.begin(9600);
+    Serial.println("\nESP32 Weather Station Starting...");
 
+    // Initialize TFT
     tft.init();
     tft.setRotation(0);
     tft.fillScreen(TFT_BLACK);
@@ -57,35 +111,21 @@ void setup() {
     tft.setTextSize(1);
     tft.drawString("Connecting to WiFi", 13, 158, 4);
 
-    // Connect to the network
-    WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) { // Wait for the Wi-Fi to connect
-        delay(500);
-        Serial.print('.');
-    }
-    Serial.println('\n');
-    Serial.println("Connection established");
-    Serial.print("IP address:\t");
-    Serial.println(WiFi.localIP());
-    tft.fillScreen(TFT_BLACK);
-    tft.drawString("Connection established", 13, 158, 4);
-
-    // Connect to Senseair S8
-    s8.begin(9600);
-
-    // Connect to SHT31
-    if (!sht31.begin(0x44)) {
-        Serial.println("Couldn't find SHT31");
+    // Initialize WiFi
+    if (!initializeWiFi()) {
+        tft.fillScreen(TFT_BLACK);
+        tft.drawString("Connection failed", 13, 158, 4);
+    } else {
+        tft.fillScreen(TFT_BLACK);
+        tft.drawString("Connection established", 13, 158, 4);
     }
 
-    // Connect to BME280
-    if (!bme.begin(0x76)) {
-        Serial.println("Could not find a valid BME280 sensor, check wiring, address, sensor ID!");
-        Serial.print("SensorID was: 0x"); Serial.println(bme.sensorID(), 16);
+    // Initialize sensors
+    if (!initializeSensors()) {
+        Serial.println("WARNING: Some sensors failed to initialize");
     }
 
-    // Connect to PMSx003
-    pms.init();
+    Serial.println("Setup complete");
 }
 
 void loop() {
@@ -113,7 +153,9 @@ void loop() {
   // Отправим данные в Serial
   logSerial(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, co2val, pms.pm01, pms.pm25, pms.pm10);
 
-  // Отправим данные в PostgreSQL
+  // Send to PostgreSQL
+  if (WiFi.status() != WL_CONNECTED) connectToWiFi();
+
   String* readValues = NULL;
   if (doWrite) {
     doPg(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, co2val, pms.pm01, pms.pm25, pms.pm10);
@@ -133,6 +175,95 @@ void loop() {
   if (pg_status >= 2) delay(15000);
   else delay(10000);
 }
+
+bool initializeWiFi() {
+    if (WiFi.status() == WL_CONNECTED) {
+        return true;
+    }
+
+    Serial.println("Connecting to WiFi...");
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+    unsigned long startTime = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - startTime < WIFI_CONNECT_TIMEOUT) {
+        Serial.print(".");
+        delay(500);
+    }
+
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("\nWiFi connection failed");
+        return false;
+    }
+
+    Serial.println("\nWiFi connected successfully");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+    return true;
+}
+
+bool initializeSensors() {
+    bool sht31Success = initializeSHT31();
+    bool bme280Success = initializeBME280();
+    bool pmsSuccess = initializePMS();
+    bool s8Success = initializeS8()();
+
+    return sht31Success && bme280Success && pmsSuccess && s8Success;
+}
+
+bool initializeSHT31() {
+    Serial.println("Initializing SHT31 sensor...");
+
+    for (int attempt = 1; attempt <= MAX_INIT_ATTEMPTS; attempt++) {
+        if (sht31.begin(SHT31_ADDR)) {
+            Serial.println("SHT31 initialized successfully");
+            return true;
+        }
+
+        Serial.printf("SHT31 initialization attempt %d failed, retrying...\n", attempt);
+        delay(SENSOR_INIT_DELAY);
+    }
+
+    Serial.println("ERROR: SHT31 initialization failed after multiple attempts");
+    return false;
+}
+
+bool initializeBME280() {
+    Serial.println("Initializing BME280 sensor...");
+
+    for (int attempt = 1; attempt <= MAX_INIT_ATTEMPTS; attempt++) {
+        if (bme.begin(BME280_ADDR)) {
+            Serial.println("BME280 initialized successfully");
+            return true;
+        }
+
+        Serial.printf("BME280 initialization attempt %d failed (SensorID: 0x%02X), retrying...\n",
+                     attempt, bme.sensorID());
+        delay(SENSOR_INIT_DELAY);
+    }
+
+    Serial.println("ERROR: BME280 initialization failed after multiple attempts");
+    return false;
+}
+
+bool initializePMS() {
+    Serial.println("Initializing PMS sensor...");
+    pms.init();
+    Serial.println("PMS sensor initialized");
+    return true; // PMS init doesn't return status
+}
+
+bool initializeS8() {
+    // Connect to Senseair S8
+    Serial.println("Initializing S8 sensor...");
+    s8.begin(9600);
+    Serial.println("S8 sensor initialized");
+    return true; // PMS init doesn't return status
+}
+
+
+
+
+
 
 void sendRequest(byte packet[])
 {
@@ -240,7 +371,7 @@ void doPg(float temp_bme, float pres_bme, float humi_bme, float temp_sht, float 
     char *msg;
     int rc;
     if (!pg_status) {
-        conn.setDbLogin(PGIP, pg_user, pg_password, pg_dbname, "utf8");
+        conn.setDbLogin(PG_IP, PG_USER, PG_PASSWORD, PG_DBNAME, "utf8");
         pg_status = 1;
         Serial.println("Status: connecting to PSQL...");
         return;
@@ -347,7 +478,7 @@ pm01, pm25, pm10 FROM outside ORDER BY dt DESC LIMIT 1";
     char *msg;
     int rc;
     if (!pg_status) {
-        conn.setDbLogin(PGIP, pg_user, pg_password, pg_dbname, "utf8");
+        conn.setDbLogin(PG_IP, PG_USER, PG_PASSWORD, PG_DBNAME, "utf8");
         pg_status = 1;
         Serial.println("Status: connecting to PSQL...");
         return readValues;
