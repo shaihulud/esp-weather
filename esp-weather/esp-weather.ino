@@ -121,42 +121,38 @@ void setup() {
 void loop() {
     // Read all sensor data
     SensorData data = readSensorData();
+    String* outdoorData = NULL;
+
+    // Try to get outdoor data if WiFi is connected and we're in read mode
+    if (WiFi.status() == WL_CONNECTED && !doWrite) {
+        // Clean up outdoor data if allocated
+        if (outdoorData) {
+            delete[] outdoorData;
+        }
+        outdoorData = selectPg();
+        if (pg_status == 2) doWrite = true;  // Toggle to write mode next
+    }
 
     // Validate sensor data
     bool dataValid = validateSensorData(data);
 
     if (dataValid) {
-        // Log to Serial
         logSensorData(data);
     } else {
-        Serial.println("Invalid sensor data detected, displaying anyway");
-    }
-
-    // ALWAYS display data on screen, regardless of WiFi/DB status
-    String* outdoorData = NULL;
-
-    // Try to get outdoor data if WiFi is connected and we're in read mode
-    if (WiFi.status() == WL_CONNECTED && !doWrite) {
-        outdoorData = selectPg();
-        if (pg_status == 2) doWrite = true;  // Toggle to write mode next
+        Serial.println("\n!!!Invalid sensor data detected!!!\n");
     }
 
     // Display data on screen (always)
     drawTft(data, outdoorData);
 
-    // Clean up outdoor data if allocated
-    if (outdoorData) {
-        delete[] outdoorData;
+    // Check WiFi connection
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("WiFi disconnected, attempting reconnection...");
+        initializeWiFi();
     }
 
     // Try to send to database if WiFi is connected, data is valid, and we're in write mode
     if (dataValid) {
-        // Check WiFi connection
-        if (WiFi.status() != WL_CONNECTED) {
-            Serial.println("WiFi disconnected, attempting reconnection...");
-            initializeWiFi();
-        }
-
         // Send to database if in write mode and WiFi is connected
         if (WiFi.status() == WL_CONNECTED && doWrite) {
             doPg(data);
@@ -324,7 +320,7 @@ void logSensorData(const SensorData& data) {
     Serial.printf("PMS    - PM1.0: %d µg/m³, PM2.5: %d µg/m³, PM10: %d µg/m³\n",
                   data.pm01, data.pm25, data.pm10);
     Serial.printf("S8     - CO2: %d ppm\n", data.co2);
-    Serial.println("=====================");
+    Serial.println("=====================\n");
 }
 
 void sendRequest(byte packet[])
