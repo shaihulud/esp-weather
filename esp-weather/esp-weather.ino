@@ -43,16 +43,6 @@ const uint8_t MAX_INIT_ATTEMPTS = 3;
 // const size_t PG_BUFFER_SIZE = 1024;
 const size_t QUERY_BUFFER_SIZE = 256;
 
-// Database connection states
-enum class DatabaseState {
-    DISCONNECTED,
-    CONNECTING,
-    CONNECTED,
-    EXECUTING_QUERY,
-    PROCESSING_RESULT,
-    ERROR
-};
-
 // Sensor data structure
 struct SensorData {
     float temp_sht31;
@@ -63,6 +53,7 @@ struct SensorData {
     uint16_t pm01;
     uint16_t pm25;
     uint16_t pm10;
+    uint16_t co2;
     bool valid;
 };
 
@@ -82,8 +73,6 @@ byte response[] = {0,0,0,0,0,0,0};  // Create an array to store the response
 TFT_eSPI tft = TFT_eSPI();
 #define LOOP_PERIOD 35 // Display updates every 35 ms
 
-DatabaseState dbState = DatabaseState::DISCONNECTED;
-
 // Function declarations
 bool initializeWiFi();
 bool initializeSensors();
@@ -94,10 +83,11 @@ bool initializeS8();
 SensorData readSensorData();
 bool validateSensorData(const SensorData& data);
 void logSensorData(const SensorData& data);
-bool handleDatabaseConnection();
-bool sendDataToDatabase(const SensorData& data);
-void handleDatabaseError(const char* error);
-void resetDatabaseConnection();
+void sendRequest(byte packet[]);
+unsigned long getValue(byte packet[]);
+void drawTft(const SensorData& data, String* outdoorData);
+void doPg(const SensorData& data);
+String* selectPg();
 
 void setup() {
     Serial.begin(9600);
@@ -129,51 +119,57 @@ void setup() {
 }
 
 void loop() {
-  // SHT31
-  float temp_sht = sht31.readTemperature();
-  float humi_sht = sht31.readHumidity();
+    // Read all sensor data
+    SensorData data = readSensorData();
 
-  // BME280
-  float temp_bme = bme.readTemperature();
-  float humi_bme = bme.readHumidity();
-  float pres_bme = bme.readPressure() / 133.322F;
+    // Validate sensor data
+    bool dataValid = validateSensorData(data);
 
-  // PMSx003
-  pms.read();
-  unsigned long pm01 = pms.pm01;
-  unsigned long pm25 = pms.pm25;
-  unsigned long pm10 = pms.pm10;
-  //   if (pms) {
-  //   }
+    if (dataValid) {
+        // Log to Serial
+        logSensorData(data);
+    } else {
+        Serial.println("Invalid sensor data detected, displaying anyway");
+    }
 
-  // Senseair S8
-  sendRequest(readCO2);
-  unsigned long co2val = getValue(response);
+    // ALWAYS display data on screen, regardless of WiFi/DB status
+    String* outdoorData = NULL;
 
-  // Отправим данные в Serial
-  logSerial(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, co2val, pms.pm01, pms.pm25, pms.pm10);
+    // Try to get outdoor data if WiFi is connected and we're in read mode
+    if (WiFi.status() == WL_CONNECTED && !doWrite) {
+        outdoorData = selectPg();
+        if (pg_status == 2) doWrite = true;  // Toggle to write mode next
+    }
 
-  // Send to PostgreSQL
-  if (WiFi.status() != WL_CONNECTED) connectToWiFi();
+    // Display data on screen (always)
+    drawTft(data, outdoorData);
 
-  String* readValues = NULL;
-  if (doWrite) {
-    doPg(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, co2val, pms.pm01, pms.pm25, pms.pm10);
-    if (pg_status == 2) doWrite = false;
-  }
-  else {
-    readValues = selectPg();
-    if (pg_status == 2) doWrite = true;
-  }
+    // Clean up outdoor data if allocated
+    if (outdoorData) {
+        delete[] outdoorData;
+    }
 
-  if (readValues) {
-    // Отправим данные на экран
-    drawTft(temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, co2val, pms.pm01, pms.pm25, pms.pm10, readValues);
-    delete[] readValues;
-  }
+    // Try to send to database if WiFi is connected, data is valid, and we're in write mode
+    if (dataValid) {
+        // Check WiFi connection
+        if (WiFi.status() != WL_CONNECTED) {
+            Serial.println("WiFi disconnected, attempting reconnection...");
+            initializeWiFi();
+        }
 
-  if (pg_status >= 2) delay(15000);
-  else delay(10000);
+        // Send to database if in write mode and WiFi is connected
+        if (WiFi.status() == WL_CONNECTED && doWrite) {
+            doPg(data);
+            if (pg_status == 2) doWrite = false;  // Toggle to read mode next
+        }
+    }
+
+    // Delay based on connection status
+    if (pg_status >= 2) {
+        delay(NORMAL_DELAY);
+    } else {
+        delay(ERROR_DELAY);
+    }
 }
 
 bool initializeWiFi() {
@@ -205,7 +201,7 @@ bool initializeSensors() {
     bool sht31Success = initializeSHT31();
     bool bme280Success = initializeBME280();
     bool pmsSuccess = initializePMS();
-    bool s8Success = initializeS8()();
+    bool s8Success = initializeS8();
 
     return sht31Success && bme280Success && pmsSuccess && s8Success;
 }
@@ -257,13 +253,79 @@ bool initializeS8() {
     Serial.println("Initializing S8 sensor...");
     s8.begin(9600);
     Serial.println("S8 sensor initialized");
-    return true; // PMS init doesn't return status
+    return true; // S8 init doesn't return status
 }
 
+SensorData readSensorData() {
+    SensorData data = {0};
 
+    // Read SHT31 data
+    data.temp_sht31 = sht31.readTemperature();
+    data.humi_sht31 = sht31.readHumidity();
 
+    // Read BME280 data
+    data.temp_bme280 = bme.readTemperature();
+    data.humi_bme280 = bme.readHumidity();
+    data.pres_bme280 = bme.readPressure() / 133.322F; // Convert Pa to mmHg
 
+    // Read PMS data
+    pms.read();
+    data.pm01 = pms.pm01;
+    data.pm25 = pms.pm25;
+    data.pm10 = pms.pm10;
 
+    // Read S8 CO2 data
+    sendRequest(readCO2);
+    data.co2 = getValue(response);
+
+    return data;
+}
+
+bool validateSensorData(const SensorData& data) {
+    // Check for NaN values
+    if (isnan(data.temp_sht31) || isnan(data.humi_sht31) ||
+        isnan(data.temp_bme280) || isnan(data.humi_bme280) ||
+        isnan(data.pres_bme280)) {
+        Serial.println("ERROR: NaN values detected in sensor data");
+        return false;
+    }
+
+    // Check reasonable ranges
+    if (data.temp_sht31 < -40 || data.temp_sht31 > 85 ||
+        data.temp_bme280 < -40 || data.temp_bme280 > 85) {
+        Serial.println("ERROR: Temperature out of valid range");
+        return false;
+    }
+
+    if (data.humi_sht31 < 0 || data.humi_sht31 > 100 ||
+        data.humi_bme280 < 0 || data.humi_bme280 > 100) {
+        Serial.println("ERROR: Humidity out of valid range");
+        return false;
+    }
+
+    if (data.pres_bme280 < 300 || data.pres_bme280 > 1100) {
+        Serial.println("ERROR: Pressure out of valid range");
+        return false;
+    }
+
+    if (data.co2 < 400 || data.co2 > 5000) {
+        Serial.println("WARNING: CO2 out of typical range");
+        // Don't return false - just warn
+    }
+
+    return true;
+}
+
+void logSensorData(const SensorData& data) {
+    Serial.println("=== Sensor Readings ===");
+    Serial.printf("SHT31  - Temp: %.2f°C, Humidity: %.2f%%\n", data.temp_sht31, data.humi_sht31);
+    Serial.printf("BME280 - Temp: %.2f°C, Humidity: %.2f%%, Pressure: %.2f mmHg\n",
+                  data.temp_bme280, data.humi_bme280, data.pres_bme280);
+    Serial.printf("PMS    - PM1.0: %d µg/m³, PM2.5: %d µg/m³, PM10: %d µg/m³\n",
+                  data.pm01, data.pm25, data.pm10);
+    Serial.printf("S8     - CO2: %d ppm\n", data.co2);
+    Serial.println("=====================");
+}
 
 void sendRequest(byte packet[])
 {
@@ -301,18 +363,7 @@ unsigned long getValue(byte packet[])
   return val;
 }
 
-void drawTft(
-  float temp_bme,
-  float pres_bme,
-  float humi_bme,
-  float temp_sht,
-  float humi_sht,
-  unsigned long co2val,
-  unsigned long pm01,
-  unsigned long pm25,
-  unsigned long pm10,
-  String* readValues
-)
+void drawTft(const SensorData& data, String* outdoorData)
 {
   char tftBuffer[40];
 
@@ -320,53 +371,43 @@ void drawTft(
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
 
   tft.setTextSize(1);
-  tft.drawString("Temp:",                     0+13,   0,  4);
-  tft.drawString("Humi:",                     120+23, 0,  4);
-  tft.drawFloat((temp_sht + temp_bme) / 2, 1, 0,      25, 6);
-  tft.drawFloat((humi_sht + humi_bme) / 2, 1, 120+10, 25, 6);
+  // Indoor temperature and humidity (averaged from both sensors)
+  tft.drawString("Temp:",                                    0+13,   0,  4);
+  tft.drawString("Humi:",                                    120+23, 0,  4);
+  tft.drawFloat((data.temp_sht31 + data.temp_bme280) / 2, 1, 0,      25, 6);
+  tft.drawFloat((data.humi_sht31 + data.humi_bme280) / 2, 1, 120+10, 25, 6);
 
+  // Pressure and CO2
   tft.drawString("Press:",                    0+13,   75, 4);
   tft.drawString("CO2:",                      120+23, 75, 4);
-  tft.drawFloat(pres_bme,                  0, 0,      100, 6);
-  if (co2val < 1000) {
-    tft.drawNumber(co2val,                    120+10, 100, 6);
+  tft.drawFloat(data.pres_bme280,          0, 0,      100, 6);
+  if (data.co2 < 1000) {
+    tft.drawNumber(data.co2,                  120+10, 100, 6);
   } else {
-    tft.drawNumber(co2val,                    115,    100, 6);
+    tft.drawNumber(data.co2,                  115,    100, 6);
   }
 
-  sprintf(tftBuffer, "PM: %d %d %d", pms.pm01, pms.pm25, pms.pm10);
+  // Indoor PM values
+  sprintf(tftBuffer, "PM: %d %d %d", data.pm01, data.pm25, data.pm10);
   tft.drawString(tftBuffer, 1, 150, 4);
 
-  if (readValues) {
-    sprintf(tftBuffer, "PM: %s %s %s", readValues[5], readValues[6], readValues[7]);
+  // Outdoor data (if available)
+  if (outdoorData) {
+    sprintf(tftBuffer, "PM: %s %s %s", outdoorData[5].c_str(), outdoorData[6].c_str(), outdoorData[7].c_str());
     tft.drawString(tftBuffer, 120+1, 150, 4);
 
-    tft.drawString("Temp:",                                               0+13, 180, 4);
-    tft.drawFloat((readValues[0].toInt() + readValues[3].toInt()) / 2, 1, 0,    205, 6);
-    tft.drawString("Humi:",                                               0+13, 258, 4);
-    tft.drawFloat((readValues[2].toInt() + readValues[4].toInt()) / 2, 1, 0,    283, 6);
+    tft.drawString("Temp:",                                                  0+13, 180, 4);
+    tft.drawFloat((outdoorData[0].toInt() + outdoorData[3].toInt()) / 2, 1, 0,    205, 6);
+    tft.drawString("Humi:",                                                  0+13, 258, 4);
+    tft.drawFloat((outdoorData[2].toInt() + outdoorData[4].toInt()) / 2, 1, 0,    283, 6);
   }
 
-  // tft.setTextColor(TFT_BLACK, TFT_WHITE);
+  // Draw cat animation
   tft.drawXBitmap(115, 190, NekoCold, 128, 128, TFT_BLACK, TFT_WHITE);
 }
 
-void logSerial(float temp_bme, float pres_bme, float humi_bme, float temp_sht, float humi_sht, unsigned long co2val, unsigned long pm01, unsigned long pm25, unsigned long pm10)
-{
-  Serial.print("Temp SHT31:  "); Serial.print(temp_sht); Serial.println(" *C");
-  Serial.print("Hum SHT31:   "); Serial.print(humi_sht); Serial.println(" %");
-  Serial.print("Temp BME280: "); Serial.print(temp_bme); Serial.println(" *C");
-  Serial.print("Hum BME280:  "); Serial.print(humi_bme); Serial.println(" %");
-  Serial.print("Press BME280: "); Serial.println(pres_bme);
-  Serial.print(F("PM0.1: "));Serial.print(pm01);Serial.println(F(" [ug/m3]"));
-  Serial.print(F("PM2.5: "));Serial.print(pm25);Serial.println(F(" [ug/m3]"));
-  Serial.print(F("PM10:  ")) ;Serial.print(pm10);Serial.println(F(" [ug/m3]"));
-  Serial.print("CO2 ppm = "); Serial.println(co2val);
-  Serial.println();
-}
-
 // Подсоединяется к PostgreSQL и отправляет в него данные
-void doPg(float temp_bme, float pres_bme, float humi_bme, float temp_sht, float humi_sht, unsigned long co2val, unsigned long pm01, unsigned long pm25, unsigned long pm10)
+void doPg(const SensorData& data)
 {
     char *msg;
     int rc;
@@ -399,7 +440,9 @@ void doPg(float temp_bme, float pres_bme, float humi_bme, float temp_sht, float 
           query,
           sizeof(query),
           PSTR("INSERT INTO room_mine VALUES (DEFAULT, %.1f, %.1f, %.1f, %.1f, %.1f, %u, %u, %u, %u)"),
-          temp_bme, pres_bme, humi_bme, temp_sht, humi_sht, co2val, pm01, pm25, pm10
+          data.temp_bme280, data.pres_bme280, data.humi_bme280,
+          data.temp_sht31, data.humi_sht31, data.co2,
+          data.pm01, data.pm25, data.pm10
         );
 
         if (conn.execute(query, false)) goto error;

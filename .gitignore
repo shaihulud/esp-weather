@@ -94,6 +94,8 @@ dev
 /constraints.in
 
 .DS_Store
+.claude
+CLAUDE.md
 pwd.txt
 main.py
 moex
