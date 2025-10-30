@@ -7,3 +7,6 @@ Contains code for
 
 ## Grafana dashboard
 ![alt text](https://github.com/shaihulud/esp-weather/blob/main/img/Grafana.png?raw=true)
+
+## Weather station
+
