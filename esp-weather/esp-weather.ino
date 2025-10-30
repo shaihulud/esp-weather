@@ -119,17 +119,23 @@ void setup() {
 }
 
 void loop() {
-    // Read all sensor data
+    static String* outdoorData = NULL;
+
     SensorData data = readSensorData();
-    String* outdoorData = NULL;
 
     // Try to get outdoor data if WiFi is connected and we're in read mode
     if (WiFi.status() == WL_CONNECTED && !doWrite) {
-        // Clean up outdoor data if allocated
-        if (outdoorData) {
-            delete[] outdoorData;
+        String* newOutdoorData = selectPg();
+
+        // Only update if we got new data
+        if (newOutdoorData != NULL) {
+            // Delete old data before replacing
+            if (outdoorData != NULL) {
+                delete[] outdoorData;
+            }
+            outdoorData = newOutdoorData;
         }
-        outdoorData = selectPg();
+
         if (pg_status == 2) doWrite = true;  // Toggle to write mode next
     }
 
@@ -320,7 +326,7 @@ void logSensorData(const SensorData& data) {
     Serial.printf("PMS    - PM1.0: %d µg/m³, PM2.5: %d µg/m³, PM10: %d µg/m³\n",
                   data.pm01, data.pm25, data.pm10);
     Serial.printf("S8     - CO2: %d ppm\n", data.co2);
-    Serial.println("=====================\n");
+    Serial.println("=======================\n");
 }
 
 void sendRequest(byte packet[])

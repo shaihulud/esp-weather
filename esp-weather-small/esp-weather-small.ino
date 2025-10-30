@@ -259,7 +259,7 @@ void logSensorData(const SensorData& data) {
                   data.temp_bme280, data.humi_bme280, data.pres_bme280);
     Serial.printf("PMS    - PM1.0: %d µg/m³, PM2.5: %d µg/m³, PM10: %d µg/m³\n", 
                   data.pm01, data.pm25, data.pm10);
-    Serial.println("=====================");
+    Serial.println("=======================\n");
 }
 
 bool sendDataToDatabase(const SensorData& data) {
