@@ -23,6 +23,7 @@ const unsigned long WIFI_CONNECT_TIMEOUT = 15000;
 const unsigned long NORMAL_DELAY = 30000;
 const unsigned long ERROR_DELAY = 10000;
 const unsigned long SENSOR_INIT_DELAY = 1000;
+const unsigned long DB_STATE_TIMEOUT = 30000;
 const uint8_t MAX_INIT_ATTEMPTS = 3;
 
 // Buffer configuration
@@ -62,6 +63,7 @@ Adafruit_SHT31 sht31 = Adafruit_SHT31();
 SerialPM pms(PMSA003, PMS_RX_PIN, PMS_TX_PIN);
 
 DatabaseState dbState = DatabaseState::DISCONNECTED;
+unsigned long dbStateSince = 0;
 
 // Function declarations
 bool initializeWiFi();
@@ -76,6 +78,7 @@ bool handleDatabaseConnection();
 bool sendDataToDatabase(const SensorData& data);
 void handleDatabaseError(const char* error);
 void resetDatabaseConnection();
+void setDbState(DatabaseState newState);
 
 void setup() {
     Serial.begin(9600);
@@ -262,7 +265,23 @@ void logSensorData(const SensorData& data) {
     Serial.println("=======================\n");
 }
 
+void setDbState(DatabaseState newState) {
+    dbState = newState;
+    dbStateSince = millis();
+}
+
 bool sendDataToDatabase(const SensorData& data) {
+    // A dead TCP connection never produces bytes, so getData()/status() alone
+    // can leave the waiting states stuck forever - enforce wall-clock progress
+    bool waitingState = dbState == DatabaseState::CONNECTING ||
+                        dbState == DatabaseState::EXECUTING_QUERY ||
+                        dbState == DatabaseState::PROCESSING_RESULT;
+    if (waitingState && millis() - dbStateSince > DB_STATE_TIMEOUT) {
+        Serial.println("ERROR: Database state timeout, resetting connection");
+        resetDatabaseConnection();
+        return false;
+    }
+
     switch (dbState) {
         case DatabaseState::DISCONNECTED:
             Serial.print("dbState DatabaseState::DISCONNECTED; ");
@@ -300,7 +319,7 @@ bool handleDatabaseConnection() {
     if (dbState == DatabaseState::DISCONNECTED) {
         Serial.println("Connecting to PostgreSQL database...");
         conn.setDbLogin(PG_IP, PG_USER, PG_PASSWORD, PG_DBNAME, "utf8");
-        dbState = DatabaseState::CONNECTING;
+        setDbState(DatabaseState::CONNECTING);
         return false; // Not ready yet
     }
 
@@ -315,7 +334,7 @@ bool handleDatabaseConnection() {
         
         if (status == CONNECTION_OK) {
             Serial.println("Database connected successfully");
-            dbState = DatabaseState::CONNECTED;
+            setDbState(DatabaseState::CONNECTED);
             return true;
         }
         
@@ -347,7 +366,7 @@ bool executeInsertQuery(const SensorData& data) {
         return false;
     }
 
-    dbState = DatabaseState::EXECUTING_QUERY;
+    setDbState(DatabaseState::EXECUTING_QUERY);
     return false; // Not complete yet
 }
 
@@ -397,7 +416,7 @@ bool processQueryResult() {
 
     if (result & PG_RSTAT_READY) {
         Serial.println("Database ready for next query");
-        dbState = DatabaseState::CONNECTED;
+        setDbState(DatabaseState::CONNECTED);
         return true; // Operation complete
     }
 
@@ -412,13 +431,12 @@ void handleDatabaseError(const char* error) {
         Serial.println("Database connection lost");
         resetDatabaseConnection();
     } else {
-        dbState = DatabaseState::ERROR;
+        setDbState(DatabaseState::ERROR);
     }
 }
 
 void resetDatabaseConnection() {
     Serial.println("Resetting database connection");
-    dbState = DatabaseState::DISCONNECTED;
-    // Note: The SimplePgSQL library may not have an explicit disconnect method
-    // The connection will be reset on next connection attempt
+    conn.close();
+    setDbState(DatabaseState::DISCONNECTED);
 }
