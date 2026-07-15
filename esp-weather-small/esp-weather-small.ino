@@ -84,6 +84,11 @@ void setup() {
     Serial.begin(9600);
     Serial.println("\nESP32 Weather Station Starting...");
 
+    // Station mode only; persistent(false) avoids rewriting credentials to NVS flash on every begin()
+    WiFi.persistent(false);
+    WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(true);
+
     // Initialize WiFi
     if (!initializeWiFi()) {
         Serial.println("ERROR: WiFi initialization failed");
@@ -106,6 +111,8 @@ void loop() {
             delay(ERROR_DELAY);
             return;
         }
+        // The old PostgreSQL socket died with the previous association
+        resetDatabaseConnection();
     }
 
     // Read sensor data
@@ -135,6 +142,8 @@ bool initializeWiFi() {
     }
 
     Serial.println("Connecting to WiFi...");
+    WiFi.disconnect();  // clear any stuck association attempt before retrying
+    delay(100);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
     unsigned long startTime = millis();
