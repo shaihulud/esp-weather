@@ -25,6 +25,7 @@ const unsigned long ERROR_DELAY = 10000;
 const unsigned long SENSOR_INIT_DELAY = 1000;
 const unsigned long DB_STATE_TIMEOUT = 30000;
 const uint8_t MAX_INIT_ATTEMPTS = 3;
+const uint8_t SENSOR_REINIT_THRESHOLD = 5;  // consecutive bad cycles before re-init
 
 // Buffer configuration
 // const size_t PG_BUFFER_SIZE = 1024;
@@ -50,7 +51,9 @@ struct SensorData {
     uint16_t pm01;
     uint16_t pm25;
     uint16_t pm10;
-    bool valid;
+    bool sht31_valid;
+    bool bme280_valid;
+    bool pms_valid;
 };
 
 // Global objects
@@ -65,6 +68,11 @@ SerialPM pms(PMSA003, PMS_RX_PIN, PMS_TX_PIN);
 DatabaseState dbState = DatabaseState::DISCONNECTED;
 unsigned long dbStateSince = 0;
 
+// Consecutive invalid-reading counters, trigger sensor re-init at threshold
+uint8_t sht31Failures = 0;
+uint8_t bme280Failures = 0;
+uint8_t pmsFailures = 0;
+
 // Function declarations
 bool initializeWiFi();
 bool initializeSensors();
@@ -72,7 +80,8 @@ bool initializeSHT31();
 bool initializeBME280();
 bool initializePMS();
 SensorData readSensorData();
-bool validateSensorData(const SensorData& data);
+bool validateSensorData(SensorData& data);
+void handleSensorHealth(const SensorData& data);
 void logSensorData(const SensorData& data);
 bool handleDatabaseConnection();
 bool sendDataToDatabase(const SensorData& data);
@@ -118,11 +127,15 @@ void loop() {
     // Read sensor data
     SensorData data = readSensorData();
 
-    // Validate and log data
-    if (validateSensorData(data)) {
+    // Validate per sensor and re-init sensors that keep failing;
+    // a single bad sensor must not block the others from being written
+    bool anyValid = validateSensorData(data);
+    handleSensorHealth(data);
+
+    if (anyValid) {
         logSensorData(data);
 
-        // Send to database
+        // Send to database (invalid sensors are written as NULL)
         if (sendDataToDatabase(data)) {
             Serial.println("Data sent successfully");
             delay(NORMAL_DELAY);
@@ -131,7 +144,7 @@ void loop() {
             delay(ERROR_DELAY);
         }
     } else {
-        Serial.println("Invalid sensor data, skipping this cycle");
+        Serial.println("No valid sensor data, skipping this cycle");
         delay(ERROR_DELAY);
     }
 }
@@ -227,6 +240,7 @@ SensorData readSensorData() {
 
     // Read PMS data
     pms.read();
+    data.pms_valid = pms.has_particulate_matter();
     data.pm01 = pms.pm01;
     data.pm25 = pms.pm25;
     data.pm10 = pms.pm10;
@@ -234,43 +248,69 @@ SensorData readSensorData() {
     return data;
 }
 
-bool validateSensorData(const SensorData& data) {
-    // Check for NaN values
-    if (isnan(data.temp_sht31) || isnan(data.humi_sht31) || 
-        isnan(data.temp_bme280) || isnan(data.humi_bme280) || 
-        isnan(data.pres_bme280)) {
-        Serial.println("ERROR: NaN values detected in sensor data");
-        return false;
+bool validateSensorData(SensorData& data) {
+    data.sht31_valid = !isnan(data.temp_sht31) && !isnan(data.humi_sht31) &&
+                       data.temp_sht31 >= -40 && data.temp_sht31 <= 85 &&
+                       data.humi_sht31 >= 0 && data.humi_sht31 <= 100;
+    if (!data.sht31_valid) {
+        Serial.println("ERROR: SHT31 data invalid (NaN or out of range)");
     }
 
-    // Check reasonable ranges
-    if (data.temp_sht31 < -40 || data.temp_sht31 > 85 ||
-        data.temp_bme280 < -40 || data.temp_bme280 > 85) {
-        Serial.println("ERROR: Temperature out of valid range");
-        return false;
+    data.bme280_valid = !isnan(data.temp_bme280) && !isnan(data.humi_bme280) &&
+                        !isnan(data.pres_bme280) &&
+                        data.temp_bme280 >= -40 && data.temp_bme280 <= 85 &&
+                        data.humi_bme280 >= 0 && data.humi_bme280 <= 100 &&
+                        data.pres_bme280 >= 300 && data.pres_bme280 <= 1100;
+    if (!data.bme280_valid) {
+        Serial.println("ERROR: BME280 data invalid (NaN or out of range)");
     }
 
-    if (data.humi_sht31 < 0 || data.humi_sht31 > 100 ||
-        data.humi_bme280 < 0 || data.humi_bme280 > 100) {
-        Serial.println("ERROR: Humidity out of valid range");
-        return false;
+    // pms_valid comes from the read status; also reject glitch values
+    // that would overflow the smallint columns
+    if (data.pms_valid &&
+        (data.pm01 > 2000 || data.pm25 > 2000 || data.pm10 > 2000)) {
+        data.pms_valid = false;
+    }
+    if (!data.pms_valid) {
+        Serial.println("ERROR: PMS data invalid (read failed or out of range)");
     }
 
-    if (data.pres_bme280 < 300 || data.pres_bme280 > 1100) {
-        Serial.println("ERROR: Pressure out of valid range");
-        return false;
-    }
+    return data.sht31_valid || data.bme280_valid || data.pms_valid;
+}
 
-    return true;
+void handleSensorHealth(const SensorData& data) {
+    sht31Failures = data.sht31_valid ? 0 : sht31Failures + 1;
+    bme280Failures = data.bme280_valid ? 0 : bme280Failures + 1;
+    pmsFailures = data.pms_valid ? 0 : pmsFailures + 1;
+
+    if (sht31Failures >= SENSOR_REINIT_THRESHOLD) {
+        Serial.println("SHT31 failing repeatedly, re-initializing...");
+        initializeSHT31();
+        sht31Failures = 0;
+    }
+    if (bme280Failures >= SENSOR_REINIT_THRESHOLD) {
+        Serial.println("BME280 failing repeatedly, re-initializing...");
+        initializeBME280();
+        bme280Failures = 0;
+    }
+    if (pmsFailures >= SENSOR_REINIT_THRESHOLD) {
+        Serial.println("PMS failing repeatedly, re-initializing...");
+        initializePMS();
+        pmsFailures = 0;
+    }
 }
 
 void logSensorData(const SensorData& data) {
     Serial.println("=== Sensor Readings ===");
-    Serial.printf("SHT31  - Temp: %.2f°C, Humidity: %.2f%%\n", data.temp_sht31, data.humi_sht31);
-    Serial.printf("BME280 - Temp: %.2f°C, Humidity: %.2f%%, Pressure: %.2f mmHg\n", 
-                  data.temp_bme280, data.humi_bme280, data.pres_bme280);
-    Serial.printf("PMS    - PM1.0: %d µg/m³, PM2.5: %d µg/m³, PM10: %d µg/m³\n", 
-                  data.pm01, data.pm25, data.pm10);
+    Serial.printf("SHT31  - Temp: %.2f°C, Humidity: %.2f%%%s\n",
+                  data.temp_sht31, data.humi_sht31,
+                  data.sht31_valid ? "" : " [INVALID]");
+    Serial.printf("BME280 - Temp: %.2f°C, Humidity: %.2f%%, Pressure: %.2f mmHg%s\n",
+                  data.temp_bme280, data.humi_bme280, data.pres_bme280,
+                  data.bme280_valid ? "" : " [INVALID]");
+    Serial.printf("PMS    - PM1.0: %d µg/m³, PM2.5: %d µg/m³, PM10: %d µg/m³%s\n",
+                  data.pm01, data.pm25, data.pm10,
+                  data.pms_valid ? "" : " [INVALID]");
     Serial.println("=======================\n");
 }
 
@@ -356,12 +396,32 @@ bool handleDatabaseConnection() {
 
 bool executeInsertQuery(const SensorData& data) {
     char query[QUERY_BUFFER_SIZE];
+    char bmeVals[32];
+    char shtVals[24];
+    char pmVals[24];
+
+    if (data.bme280_valid) {
+        snprintf(bmeVals, sizeof(bmeVals), "%.2f, %.2f, %.2f",
+                 data.temp_bme280, data.pres_bme280, data.humi_bme280);
+    } else {
+        strcpy(bmeVals, "NULL, NULL, NULL");
+    }
+    if (data.sht31_valid) {
+        snprintf(shtVals, sizeof(shtVals), "%.2f, %.2f",
+                 data.temp_sht31, data.humi_sht31);
+    } else {
+        strcpy(shtVals, "NULL, NULL");
+    }
+    if (data.pms_valid) {
+        snprintf(pmVals, sizeof(pmVals), "%u, %u, %u",
+                 data.pm01, data.pm25, data.pm10);
+    } else {
+        strcpy(pmVals, "NULL, NULL, NULL");
+    }
 
     int result = snprintf(query, sizeof(query),
-        "INSERT INTO outside VALUES (DEFAULT, %.2f, %.2f, %.2f, %.2f, %.2f, %u, %u, %u)",
-        data.temp_bme280, data.pres_bme280, data.humi_bme280, 
-        data.temp_sht31, data.humi_sht31, 
-        data.pm01, data.pm25, data.pm10);
+        "INSERT INTO outside VALUES (DEFAULT, %s, %s, %s)",
+        bmeVals, shtVals, pmVals);
 
     if (result >= sizeof(query)) {
         Serial.println("ERROR: Query buffer overflow");
