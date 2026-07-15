@@ -24,6 +24,7 @@ const unsigned long NORMAL_DELAY = 30000;
 const unsigned long ERROR_DELAY = 10000;
 const unsigned long SENSOR_INIT_DELAY = 1000;
 const unsigned long DB_STATE_TIMEOUT = 30000;
+const unsigned long INSERT_WATCHDOG_TIMEOUT = 600000;  // restart if no insert for 10 min
 const uint8_t MAX_INIT_ATTEMPTS = 3;
 const uint8_t SENSOR_REINIT_THRESHOLD = 5;  // consecutive bad cycles before re-init
 
@@ -73,6 +74,8 @@ uint8_t sht31Failures = 0;
 uint8_t bme280Failures = 0;
 uint8_t pmsFailures = 0;
 
+unsigned long lastSuccessfulInsert = 0;
+
 // Function declarations
 bool initializeWiFi();
 bool initializeSensors();
@@ -88,6 +91,7 @@ bool sendDataToDatabase(const SensorData& data);
 void handleDatabaseError(const char* error);
 void resetDatabaseConnection();
 void setDbState(DatabaseState newState);
+void checkInsertWatchdog();
 
 void setup() {
     Serial.begin(9600);
@@ -112,6 +116,9 @@ void setup() {
 }
 
 void loop() {
+    // Last-resort recovery for any failure mode the code doesn't handle
+    checkInsertWatchdog();
+
     // Ensure WiFi is connected
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("WiFi disconnected, attempting reconnection...");
@@ -485,6 +492,7 @@ bool processQueryResult() {
 
     if (result & PG_RSTAT_READY) {
         Serial.println("Database ready for next query");
+        lastSuccessfulInsert = millis();
         setDbState(DatabaseState::CONNECTED);
         return true; // Operation complete
     }
@@ -508,4 +516,13 @@ void resetDatabaseConnection() {
     Serial.println("Resetting database connection");
     conn.close();
     setDbState(DatabaseState::DISCONNECTED);
+}
+
+void checkInsertWatchdog() {
+    if (millis() - lastSuccessfulInsert > INSERT_WATCHDOG_TIMEOUT) {
+        Serial.println("WATCHDOG: no successful insert for 10 minutes, restarting");
+        Serial.flush();
+        delay(100);
+        ESP.restart();
+    }
 }
