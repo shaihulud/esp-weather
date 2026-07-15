@@ -38,7 +38,6 @@ enum class DatabaseState {
     CONNECTING,
     CONNECTED,
     EXECUTING_QUERY,
-    PROCESSING_RESULT,
     ERROR
 };
 
@@ -142,8 +141,20 @@ void loop() {
     if (anyValid) {
         logSensorData(data);
 
-        // Send to database (invalid sensors are written as NULL)
-        if (sendDataToDatabase(data)) {
+        // Send to database (invalid sensors are written as NULL).
+        // Drive the state machine to completion (<1s when healthy) instead of
+        // one step per loop pass, which stretched each insert to 70-90s and
+        // discarded the readings taken in between. On a hard failure (ERROR
+        // state) give up this cycle and back off via ERROR_DELAY.
+        bool sent = false;
+        unsigned long dbCycleStart = millis();
+        while (!sent && millis() - dbCycleStart < 2 * DB_STATE_TIMEOUT) {
+            sent = sendDataToDatabase(data);
+            if (dbState == DatabaseState::ERROR) break;
+            if (!sent) delay(50);
+        }
+
+        if (sent) {
             Serial.println("Data sent successfully");
             delay(NORMAL_DELAY);
         } else {
@@ -267,7 +278,7 @@ bool validateSensorData(SensorData& data) {
                         !isnan(data.pres_bme280) &&
                         data.temp_bme280 >= -40 && data.temp_bme280 <= 85 &&
                         data.humi_bme280 >= 0 && data.humi_bme280 <= 100 &&
-                        data.pres_bme280 >= 300 && data.pres_bme280 <= 1100;
+                        data.pres_bme280 >= 500 && data.pres_bme280 <= 850;
     if (!data.bme280_valid) {
         Serial.println("ERROR: BME280 data invalid (NaN or out of range)");
     }
@@ -329,9 +340,7 @@ void setDbState(DatabaseState newState) {
 bool sendDataToDatabase(const SensorData& data) {
     // A dead TCP connection never produces bytes, so getData()/status() alone
     // can leave the waiting states stuck forever - enforce wall-clock progress
-    bool waitingState = dbState == DatabaseState::CONNECTING ||
-                        dbState == DatabaseState::EXECUTING_QUERY ||
-                        dbState == DatabaseState::PROCESSING_RESULT;
+    bool waitingState = dbState == DatabaseState::CONNECTING || dbState == DatabaseState::EXECUTING_QUERY;
     if (waitingState && millis() - dbStateSince > DB_STATE_TIMEOUT) {
         Serial.println("ERROR: Database state timeout, resetting connection");
         resetDatabaseConnection();
@@ -340,30 +349,20 @@ bool sendDataToDatabase(const SensorData& data) {
 
     switch (dbState) {
         case DatabaseState::DISCONNECTED:
-            Serial.print("dbState DatabaseState::DISCONNECTED; ");
-            return handleDatabaseConnection();
-            
         case DatabaseState::CONNECTING:
-            Serial.print("dbState DatabaseState::CONNECTING; ");
-            return handleDatabaseConnection();
-            
+            handleDatabaseConnection();
+            return false;
+
         case DatabaseState::CONNECTED:
-            Serial.print("dbState DatabaseState::CONNECTED; ");
             return executeInsertQuery(data);
-            
+
         case DatabaseState::EXECUTING_QUERY:
-            Serial.print("dbState DatabaseState::EXECUTING_QUERY; ");
             return processQueryResult();
-            
-        case DatabaseState::PROCESSING_RESULT:
-            Serial.print("dbState DatabaseState::PROCESSING_RESULT; ");
-            return processQueryResult();
-            
+
         case DatabaseState::ERROR:
-            Serial.print("dbState DatabaseState::ERROR; ");
             resetDatabaseConnection();
             return false;
-            
+
         default:
             Serial.println("dbState ERROR: Unknown database state");
             resetDatabaseConnection();
@@ -503,13 +502,11 @@ bool processQueryResult() {
 
 void handleDatabaseError(const char* error) {
     Serial.printf("Database error: %s\n", error ? error : "Unknown error");
-
-    if (conn.status() == CONNECTION_BAD) {
-        Serial.println("Database connection lost");
-        resetDatabaseConnection();
-    } else {
-        setDbState(DatabaseState::ERROR);
-    }
+    // Always land in ERROR so the send loop backs off for ERROR_DELAY
+    // instead of hammering reconnection attempts; the ERROR state resets
+    // to DISCONNECTED on the next cycle
+    conn.close();
+    setDbState(DatabaseState::ERROR);
 }
 
 void resetDatabaseConnection() {
