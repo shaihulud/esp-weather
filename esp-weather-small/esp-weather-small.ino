@@ -216,7 +216,20 @@ bool initializeSHT31() {
 }
 
 bool initializeBME280() {
-    return initSensorWithRetry("BME280", [] { return bme.begin(BME280_ADDR); });
+    return initSensorWithRetry("BME280", [] {
+        if (!bme.begin(BME280_ADDR)) {
+            return false;
+        }
+        // Forced mode: sensor sleeps between readings instead of sampling
+        // continuously, which self-heats the die by several degrees and
+        // skews temperature (high) and relative humidity (low)
+        bme.setSampling(Adafruit_BME280::MODE_FORCED,
+                        Adafruit_BME280::SAMPLING_X1,  // temperature
+                        Adafruit_BME280::SAMPLING_X1,  // pressure
+                        Adafruit_BME280::SAMPLING_X1,  // humidity
+                        Adafruit_BME280::FILTER_OFF);
+        return true;
+    });
 }
 
 bool initializePMS() {
@@ -233,10 +246,16 @@ SensorData readSensorData() {
     data.temp_sht31 = sht31.readTemperature();
     data.humi_sht31 = sht31.readHumidity();
 
-    // Read BME280 data
-    data.temp_bme280 = bme.readTemperature();
-    data.humi_bme280 = bme.readHumidity();
-    data.pres_bme280 = bme.readPressure() / 133.322F; // Convert Pa to mmHg
+    // Read BME280 data (forced mode: trigger one measurement on demand)
+    if (bme.takeForcedMeasurement()) {
+        data.temp_bme280 = bme.readTemperature();
+        data.humi_bme280 = bme.readHumidity();
+        data.pres_bme280 = bme.readPressure() / 133.322F; // Convert Pa to mmHg
+    } else {
+        data.temp_bme280 = NAN;
+        data.humi_bme280 = NAN;
+        data.pres_bme280 = NAN;
+    }
 
     // Read PMS data
     pms.read();
