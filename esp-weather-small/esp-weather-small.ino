@@ -29,7 +29,6 @@ const uint8_t MAX_INIT_ATTEMPTS = 3;
 const uint8_t SENSOR_REINIT_THRESHOLD = 5;  // consecutive bad cycles before re-init
 
 // Buffer configuration
-// const size_t PG_BUFFER_SIZE = 1024;
 const size_t QUERY_BUFFER_SIZE = 256;
 
 // Database connection states
@@ -74,10 +73,12 @@ uint8_t bme280Failures = 0;
 uint8_t pmsFailures = 0;
 
 unsigned long lastSuccessfulInsert = 0;
+bool queryHadError = false;  // server rejected the current query
 
 // Function declarations
 bool initializeWiFi();
 bool initializeSensors();
+bool initSensorWithRetry(const char* name, bool (*beginSensor)());
 bool initializeSHT31();
 bool initializeBME280();
 bool initializePMS();
@@ -85,8 +86,12 @@ SensorData readSensorData();
 bool validateSensorData(SensorData& data);
 void handleSensorHealth(const SensorData& data);
 void logSensorData(const SensorData& data);
-bool handleDatabaseConnection();
 bool sendDataToDatabase(const SensorData& data);
+bool advanceDbStateMachine(const SensorData& data);
+void startDbConnection();
+void pollDbConnection();
+bool executeInsertQuery(const SensorData& data);
+bool processQueryResult();
 void handleDatabaseError(const char* error);
 void resetDatabaseConnection();
 void setDbState(DatabaseState newState);
@@ -137,24 +142,11 @@ void loop() {
     // a single bad sensor must not block the others from being written
     bool anyValid = validateSensorData(data);
     handleSensorHealth(data);
+    logSensorData(data);
 
     if (anyValid) {
-        logSensorData(data);
-
-        // Send to database (invalid sensors are written as NULL).
-        // Drive the state machine to completion (<1s when healthy) instead of
-        // one step per loop pass, which stretched each insert to 70-90s and
-        // discarded the readings taken in between. On a hard failure (ERROR
-        // state) give up this cycle and back off via ERROR_DELAY.
-        bool sent = false;
-        unsigned long dbCycleStart = millis();
-        while (!sent && millis() - dbCycleStart < 2 * DB_STATE_TIMEOUT) {
-            sent = sendDataToDatabase(data);
-            if (dbState == DatabaseState::ERROR) break;
-            if (!sent) delay(50);
-        }
-
-        if (sent) {
+        // Send to database (invalid sensors are written as NULL)
+        if (sendDataToDatabase(data)) {
             Serial.println("Data sent successfully");
             delay(NORMAL_DELAY);
         } else {
@@ -202,39 +194,29 @@ bool initializeSensors() {
     return sht31Success && bme280Success && pmsSuccess;
 }
 
-bool initializeSHT31() {
-    Serial.println("Initializing SHT31 sensor...");
+bool initSensorWithRetry(const char* name, bool (*beginSensor)()) {
+    Serial.printf("Initializing %s sensor...\n", name);
 
     for (int attempt = 1; attempt <= MAX_INIT_ATTEMPTS; attempt++) {
-        if (sht31.begin(SHT31_ADDR)) {
-            Serial.println("SHT31 initialized successfully");
+        if (beginSensor()) {
+            Serial.printf("%s initialized successfully\n", name);
             return true;
         }
 
-        Serial.printf("SHT31 initialization attempt %d failed, retrying...\n", attempt);
+        Serial.printf("%s initialization attempt %d failed, retrying...\n", name, attempt);
         delay(SENSOR_INIT_DELAY);
     }
 
-    Serial.println("ERROR: SHT31 initialization failed after multiple attempts");
+    Serial.printf("ERROR: %s initialization failed after multiple attempts\n", name);
     return false;
 }
 
+bool initializeSHT31() {
+    return initSensorWithRetry("SHT31", [] { return sht31.begin(SHT31_ADDR); });
+}
+
 bool initializeBME280() {
-    Serial.println("Initializing BME280 sensor...");
-
-    for (int attempt = 1; attempt <= MAX_INIT_ATTEMPTS; attempt++) {
-        if (bme.begin(BME280_ADDR)) {
-            Serial.println("BME280 initialized successfully");
-            return true;
-        }
-
-        Serial.printf("BME280 initialization attempt %d failed (SensorID: 0x%02X), retrying...\n", 
-                     attempt, bme.sensorID());
-        delay(SENSOR_INIT_DELAY);
-    }
-
-    Serial.println("ERROR: BME280 initialization failed after multiple attempts");
-    return false;
+    return initSensorWithRetry("BME280", [] { return bme.begin(BME280_ADDR); });
 }
 
 bool initializePMS() {
@@ -245,7 +227,7 @@ bool initializePMS() {
 }
 
 SensorData readSensorData() {
-    SensorData data = {0};
+    SensorData data = {};
 
     // Read SHT31 data
     data.temp_sht31 = sht31.readTemperature();
@@ -270,27 +252,18 @@ bool validateSensorData(SensorData& data) {
     data.sht31_valid = !isnan(data.temp_sht31) && !isnan(data.humi_sht31) &&
                        data.temp_sht31 >= -40 && data.temp_sht31 <= 85 &&
                        data.humi_sht31 >= 0 && data.humi_sht31 <= 100;
-    if (!data.sht31_valid) {
-        Serial.println("ERROR: SHT31 data invalid (NaN or out of range)");
-    }
-
     data.bme280_valid = !isnan(data.temp_bme280) && !isnan(data.humi_bme280) &&
                         !isnan(data.pres_bme280) &&
                         data.temp_bme280 >= -40 && data.temp_bme280 <= 85 &&
                         data.humi_bme280 >= 0 && data.humi_bme280 <= 100 &&
+                        // mmHg (recorded extremes ~650-815 at sea level)
                         data.pres_bme280 >= 500 && data.pres_bme280 <= 850;
-    if (!data.bme280_valid) {
-        Serial.println("ERROR: BME280 data invalid (NaN or out of range)");
-    }
 
     // pms_valid comes from the read status; also reject glitch values
     // that would overflow the smallint columns
     if (data.pms_valid &&
         (data.pm01 > 2000 || data.pm25 > 2000 || data.pm10 > 2000)) {
         data.pms_valid = false;
-    }
-    if (!data.pms_valid) {
-        Serial.println("ERROR: PMS data invalid (read failed or out of range)");
     }
 
     return data.sht31_valid || data.bme280_valid || data.pms_valid;
@@ -338,9 +311,29 @@ void setDbState(DatabaseState newState) {
 }
 
 bool sendDataToDatabase(const SensorData& data) {
+    // Drive the state machine to completion: <1s when healthy, one 30s
+    // stuck-state reset plus a retry at worst. On a hard failure (ERROR
+    // state) give up so the caller backs off via ERROR_DELAY.
+    unsigned long start = millis();
+    while (millis() - start < 2 * DB_STATE_TIMEOUT) {
+        if (advanceDbStateMachine(data)) {
+            return !queryHadError;
+        }
+        if (dbState == DatabaseState::ERROR) {
+            return false;
+        }
+        delay(50);
+    }
+    return false;
+}
+
+// Performs one step of the connect/insert cycle; returns true once the
+// current query's round-trip has completed
+bool advanceDbStateMachine(const SensorData& data) {
     // A dead TCP connection never produces bytes, so getData()/status() alone
     // can leave the waiting states stuck forever - enforce wall-clock progress
-    bool waitingState = dbState == DatabaseState::CONNECTING || dbState == DatabaseState::EXECUTING_QUERY;
+    bool waitingState = dbState == DatabaseState::CONNECTING ||
+                        dbState == DatabaseState::EXECUTING_QUERY;
     if (waitingState && millis() - dbStateSince > DB_STATE_TIMEOUT) {
         Serial.println("ERROR: Database state timeout, resetting connection");
         resetDatabaseConnection();
@@ -349,8 +342,11 @@ bool sendDataToDatabase(const SensorData& data) {
 
     switch (dbState) {
         case DatabaseState::DISCONNECTED:
+            startDbConnection();
+            return false;
+
         case DatabaseState::CONNECTING:
-            handleDatabaseConnection();
+            pollDbConnection();
             return false;
 
         case DatabaseState::CONNECTED:
@@ -370,34 +366,23 @@ bool sendDataToDatabase(const SensorData& data) {
     }
 }
 
-bool handleDatabaseConnection() {
-    if (dbState == DatabaseState::DISCONNECTED) {
-        Serial.println("Connecting to PostgreSQL database...");
-        conn.setDbLogin(PG_IP, PG_USER, PG_PASSWORD, PG_DBNAME, "utf8");
-        setDbState(DatabaseState::CONNECTING);
-        return false; // Not ready yet
-    }
+void startDbConnection() {
+    Serial.println("Connecting to PostgreSQL database...");
+    conn.setDbLogin(PG_IP, PG_USER, PG_PASSWORD, PG_DBNAME, "utf8");
+    setDbState(DatabaseState::CONNECTING);
+}
 
-    if (dbState == DatabaseState::CONNECTING) {
-        int status = conn.status();
-        
-        if (status == CONNECTION_BAD || status == CONNECTION_NEEDED) {
-            const char* error = conn.getMessage();
-            handleDatabaseError(error ? error : "Connection failed");
-            return false;
-        }
-        
-        if (status == CONNECTION_OK) {
-            Serial.println("Database connected successfully");
-            setDbState(DatabaseState::CONNECTED);
-            return true;
-        }
-        
-        // Still connecting
-        return false;
-    }
+void pollDbConnection() {
+    int status = conn.status();
 
-    return false;
+    if (status == CONNECTION_BAD || status == CONNECTION_NEEDED) {
+        const char* error = conn.getMessage();
+        handleDatabaseError(error ? error : "Connection failed");
+    } else if (status == CONNECTION_OK) {
+        Serial.println("Database connected successfully");
+        setDbState(DatabaseState::CONNECTED);
+    }
+    // Otherwise still connecting - stay in CONNECTING and poll again
 }
 
 bool executeInsertQuery(const SensorData& data) {
@@ -441,6 +426,7 @@ bool executeInsertQuery(const SensorData& data) {
         return false;
     }
 
+    queryHadError = false;
     setDbState(DatabaseState::EXECUTING_QUERY);
     return false; // Not complete yet
 }
@@ -454,32 +440,12 @@ bool processQueryResult() {
     }
 
     if (result == 0) {
-        // Still processing
+        // No response bytes yet
         return false;
     }
 
-    // Process different types of results
-    if (result & PG_RSTAT_HAVE_COLUMNS) {
-        Serial.print("Columns: ");
-        for (int i = 0; i < conn.nfields(); i++) {
-            if (i > 0) Serial.print(" | ");
-            Serial.print(conn.getColumn(i));
-        }
-        Serial.println();
-    }
-
-    if (result & PG_RSTAT_HAVE_ROW) {
-        Serial.print("Row: ");
-        for (int i = 0; i < conn.nfields(); i++) {
-            if (i > 0) Serial.print(" | ");
-            const char* value = conn.getValue(i);
-            Serial.print(value ? value : "NULL");
-        }
-        Serial.println();
-    }
-
-    if (result & PG_RSTAT_HAVE_SUMMARY) {
-        Serial.printf("Query completed - Rows affected: %d\n", conn.ntuples());
+    if (result & PG_RSTAT_HAVE_ERROR) {
+        queryHadError = true;
     }
 
     if (result & PG_RSTAT_HAVE_MESSAGE) {
@@ -489,11 +455,19 @@ bool processQueryResult() {
         }
     }
 
+    if (result & PG_RSTAT_HAVE_SUMMARY) {
+        Serial.printf("Query completed - Rows affected: %d\n", conn.ntuples());
+    }
+
     if (result & PG_RSTAT_READY) {
-        Serial.println("Database ready for next query");
+        if (queryHadError) {
+            Serial.println("Query finished with error");
+        }
+        // Even a rejected query proves the connection is alive - feed the
+        // watchdog either way, a restart can't fix a bad statement
         lastSuccessfulInsert = millis();
         setDbState(DatabaseState::CONNECTED);
-        return true; // Operation complete
+        return true; // Round-trip complete
     }
 
     // Continue processing
@@ -517,7 +491,8 @@ void resetDatabaseConnection() {
 
 void checkInsertWatchdog() {
     if (millis() - lastSuccessfulInsert > INSERT_WATCHDOG_TIMEOUT) {
-        Serial.println("WATCHDOG: no successful insert for 10 minutes, restarting");
+        Serial.printf("WATCHDOG: no successful insert for %lu minutes, restarting\n",
+                      INSERT_WATCHDOG_TIMEOUT / 60000UL);
         Serial.flush();
         delay(100);
         ESP.restart();
