@@ -18,13 +18,13 @@
 
 #include "tiles/neko_cold.h"
 
-// Configuration constants
-const char* WIFI_SSID = "";
-const char* WIFI_PASSWORD = "";
-const char* PG_USER = "";
-const char* PG_PASSWORD = "";
-const char* PG_DBNAME = "weather";
-const IPAddress PG_IP(0, 0, 0, 0);
+// WiFi + PostgreSQL credentials live in secrets.h (gitignored);
+// copy secrets.h.example to secrets.h and fill in your values
+#include "secrets.h"
+
+#ifndef SECRETS_STATION_INDOOR
+#error "Wrong secrets.h: this is the indoor station, use its own secrets file"
+#endif
 
 // Hardware configuration
 const uint8_t PMS_RX_PIN = 34;
