@@ -103,3 +103,6 @@ psyc
 
 # Per-station Arduino credentials (see secrets.h.example)
 secrets.h
+
+# Legacy code, kept locally only
+esp-weather-x-old/
