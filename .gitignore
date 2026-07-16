@@ -100,3 +100,6 @@ pwd.txt
 main.py
 moex
 psyc
+
+# Per-station Arduino credentials (see secrets.h.example)
+secrets.h

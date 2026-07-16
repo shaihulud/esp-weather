@@ -4,19 +4,25 @@
 #include <PMserial.h>
 #include "SimplePgSQL.h"
 
-// Configuration constants
-const char* WIFI_SSID = "";
-const char* WIFI_PASSWORD = "";
-const char* PG_USER = "";
-const char* PG_PASSWORD = "";
-const char* PG_DBNAME = "weather";
-const IPAddress PG_IP(0, 0, 0, 0);
+#include "secrets.h"
+
+#ifndef SECRETS_STATION_OUTDOOR
+#error "Wrong secrets.h: this is the outdoor station, use its own secrets file"
+#endif
 
 // Hardware configuration
 const uint8_t PMS_RX_PIN = 34;
 const uint8_t PMS_TX_PIN = 33;
 const uint8_t SHT31_ADDR = 0x44;
 const uint8_t BME280_ADDR = 0x76;
+
+// Per-board BME280 calibration, measured 2026-07-16 side by side with the
+// SHT31 (humidity) and the indoor station (pressure); re-tune if the sensor
+// is replaced. Pressure offset counters the t_fine shift introduced by
+// setTemperatureCompensation(), which also skews the compensated pressure.
+const float BME_TEMP_COMPENSATION = -2.3;  // die reads high vs SHT31
+const float BME_HUMIDITY_OFFSET = 16.5;
+const float BME_PRESSURE_OFFSET = 3.0;  // mmHg
 
 // Timing constants
 const unsigned long WIFI_CONNECT_TIMEOUT = 15000;
@@ -228,6 +234,7 @@ bool initializeBME280() {
                         Adafruit_BME280::SAMPLING_X1,  // pressure
                         Adafruit_BME280::SAMPLING_X1,  // humidity
                         Adafruit_BME280::FILTER_OFF);
+        bme.setTemperatureCompensation(BME_TEMP_COMPENSATION);
         return true;
     });
 }
@@ -249,8 +256,8 @@ SensorData readSensorData() {
     // Read BME280 data (forced mode: trigger one measurement on demand)
     if (bme.takeForcedMeasurement()) {
         data.temp_bme280 = bme.readTemperature();
-        data.humi_bme280 = bme.readHumidity();
-        data.pres_bme280 = bme.readPressure() / 133.322F; // Convert Pa to mmHg
+        data.humi_bme280 = fminf(bme.readHumidity() + BME_HUMIDITY_OFFSET, 100.0f);
+        data.pres_bme280 = bme.readPressure() / 133.322F + BME_PRESSURE_OFFSET; // Pa -> mmHg
     } else {
         data.temp_bme280 = NAN;
         data.humi_bme280 = NAN;
