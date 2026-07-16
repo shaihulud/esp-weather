@@ -48,6 +48,7 @@ const unsigned long SENSOR_INIT_DELAY = 1000;
 const unsigned long DB_STATE_TIMEOUT = 30000;
 const unsigned long INSERT_WATCHDOG_TIMEOUT = 600000;  // restart if no insert for 10 min
 const unsigned long S8_RESPONSE_TIMEOUT = 1000;
+const unsigned long OUTDOOR_STALE_SECONDS = 300;  // grey out outdoor data older than this
 const uint8_t MAX_INIT_ATTEMPTS = 3;
 const uint8_t SENSOR_REINIT_THRESHOLD = 5;  // consecutive bad cycles before re-init
 
@@ -90,6 +91,8 @@ struct OutdoorData {
     int pm01;
     int pm25;
     int pm10;
+    long ageSeconds;           // row age reported by the server at fetch time
+    unsigned long fetchedAtMs; // millis() when the row was fetched
     bool valid;
 };
 
@@ -499,7 +502,8 @@ bool sendDataToDatabase(const SensorData& data) {
 void fetchOutdoorData(OutdoorData& out) {
     static const char query[] PROGMEM =
         "SELECT temperature_bme, pressure_bme, humidity_bme, "
-        "temperature_sht, humidity_sht, pm01, pm25, pm10 "
+        "temperature_sht, humidity_sht, pm01, pm25, pm10, "
+        "EXTRACT(EPOCH FROM (now() - dt))::int "
         "FROM outside ORDER BY dt DESC LIMIT 1";
 
     OutdoorData fresh = {};
@@ -511,7 +515,7 @@ void fetchOutdoorData(OutdoorData& out) {
 // Columns arrive in the SELECT's order; outdoor sensors that failed are
 // NULL in the database and become NAN here
 void parseOutdoorRow(OutdoorData& out) {
-    if (conn.nfields() < 8) {
+    if (conn.nfields() < 9) {
         return;
     }
     const char* v;
@@ -523,6 +527,11 @@ void parseOutdoorRow(OutdoorData& out) {
     v = conn.getValue(5); out.pm01 = v ? atoi(v) : 0;
     v = conn.getValue(6); out.pm25 = v ? atoi(v) : 0;
     v = conn.getValue(7); out.pm10 = v ? atoi(v) : 0;
+    v = conn.getValue(8); out.ageSeconds = v ? atol(v) : 0;
+    if (out.ageSeconds < 0) {
+        out.ageSeconds = 0;  // guard against clock skew
+    }
+    out.fetchedAtMs = millis();
     out.valid = true;
 }
 
@@ -743,15 +752,33 @@ void drawTft(const SensorData& data, const OutdoorData& outdoor) {
         tft.drawNumber(data.co2, 115, 100, 6);
     }
 
-    // Indoor PM values
+    // Indoor PM values (font 2 so both PM columns fit side by side)
     sprintf(tftBuffer, "PM: %d %d %d", data.pm01, data.pm25, data.pm10);
-    tft.drawString(tftBuffer, 1, 150, 4);
+    tft.drawString(tftBuffer, 1, 155, 2);
 
     // Outdoor data (if ever fetched; NAN fields mean that outdoor sensor
     // was down and its columns were NULL)
     if (outdoor.valid) {
+        // Row age = age reported by the server plus time since the fetch;
+        // grey out the outdoor block and show its age when it goes stale
+        unsigned long ageSec = (unsigned long)outdoor.ageSeconds +
+                               (millis() - outdoor.fetchedAtMs) / 1000;
+        bool stale = ageSec > OUTDOOR_STALE_SECONDS;
+        tft.setTextColor(stale ? TFT_DARKGREY : TFT_WHITE, TFT_BLACK);
+
         sprintf(tftBuffer, "PM: %d %d %d", outdoor.pm01, outdoor.pm25, outdoor.pm10);
-        tft.drawString(tftBuffer, 121, 150, 4);
+        tft.drawString(tftBuffer, 121, 155, 2);
+
+        if (stale) {
+            if (ageSec < 3600) {
+                sprintf(tftBuffer, "%lum old", ageSec / 60);
+            } else if (ageSec < 86400) {
+                sprintf(tftBuffer, "%luh old", ageSec / 3600);
+            } else {
+                strcpy(tftBuffer, ">1d old");
+            }
+            tft.drawString(tftBuffer, 121, 172, 2);
+        }
 
         float outdoorTemp;
         if (isnan(outdoor.temp_sht)) {
@@ -767,6 +794,8 @@ void drawTft(const SensorData& data, const OutdoorData& outdoor) {
         tft.drawFloat(outdoorTemp, 1, 0, 205, 6);
         tft.drawString("Humi:", 13, 258, 4);
         tft.drawFloat(outdoorHumi, 1, 0, 283, 6);
+
+        tft.setTextColor(TFT_WHITE, TFT_BLACK);
     }
 
     // Draw cat animation
