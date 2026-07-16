@@ -16,6 +16,11 @@
 #include <TFT_eSPI.h>
 
 #include "tiles/neko_cold.h"
+#include "tiles/neko_hot.h"
+#include "tiles/neko_pollution.h"
+#include "tiles/neko_rain.h"
+#include "tiles/neko_snow.h"
+#include "tiles/neko_summer.h"
 
 // WiFi + PostgreSQL credentials live in secrets.h (gitignored);
 // copy secrets.h.example to secrets.h and fill in your values
@@ -49,6 +54,13 @@ const unsigned long DB_STATE_TIMEOUT = 30000;
 const unsigned long INSERT_WATCHDOG_TIMEOUT = 600000;  // restart if no insert for 10 min
 const unsigned long S8_RESPONSE_TIMEOUT = 1000;
 const unsigned long OUTDOOR_STALE_SECONDS = 300;  // grey out outdoor data older than this
+
+// Weather-cat thresholds (outdoor conditions)
+const int CAT_PM25_POLLUTION = 35;      // µg/m³: mask goes on
+const float CAT_RAIN_HUMIDITY = 93.0;   // %: no rain sensor, so near-saturation = precipitation
+const float CAT_SNOW_MAX_TEMP = 0.0;    // °C: freezing means snow gear, always
+const float CAT_COLD_MAX_TEMP = 15.0;   // °C: scarf weather below this
+const float CAT_HOT_MIN_TEMP = 26.0;    // °C: hand-fan weather above this
 const uint8_t MAX_INIT_ATTEMPTS = 3;
 const uint8_t SENSOR_REINIT_THRESHOLD = 5;  // consecutive bad cycles before re-init
 
@@ -152,6 +164,7 @@ void handleDatabaseError(const char* error);
 void resetDatabaseConnection();
 void setDbState(DatabaseState newState);
 void checkInsertWatchdog();
+const unsigned char* pickCat(const OutdoorData& outdoor);
 void drawTft(const SensorData& data, const OutdoorData& outdoor);
 
 void setup() {
@@ -718,6 +731,37 @@ void checkInsertWatchdog() {
     }
 }
 
+// Chooses the cat for the current outdoor conditions.
+// Priority: air quality beats precipitation beats temperature.
+const unsigned char* pickCat(const OutdoorData& outdoor) {
+    if (!outdoor.valid) {
+        return NekoSummer;  // nothing known yet
+    }
+
+    float temp = isnan(outdoor.temp_sht) ? outdoor.temp_bme : outdoor.temp_sht;
+    float humi = isnan(outdoor.humi_sht) ? outdoor.humi_bme : outdoor.humi_sht;
+
+    if (outdoor.pm25 > CAT_PM25_POLLUTION) {
+        return NekoPollution;
+    }
+    if (!isnan(temp) && temp < CAT_SNOW_MAX_TEMP) {
+        return NekoSnow;
+    }
+    if (!isnan(humi) && humi >= CAT_RAIN_HUMIDITY) {
+        return NekoRain;
+    }
+    if (isnan(temp)) {
+        return NekoSummer;
+    }
+    if (temp < CAT_COLD_MAX_TEMP) {
+        return NekoCold;
+    }
+    if (temp >= CAT_HOT_MIN_TEMP) {
+        return NekoHot;
+    }
+    return NekoSummer;
+}
+
 void drawTft(const SensorData& data, const OutdoorData& outdoor) {
     char tftBuffer[40];
 
@@ -798,6 +842,6 @@ void drawTft(const SensorData& data, const OutdoorData& outdoor) {
         tft.setTextColor(TFT_WHITE, TFT_BLACK);
     }
 
-    // Draw cat animation
-    tft.drawXBitmap(115, 190, NekoCold, 128, 128, TFT_BLACK, TFT_WHITE);
+    // Weather cat: outfit follows the outdoor conditions
+    tft.drawXBitmap(115, 190, pickCat(outdoor), 128, 128, TFT_BLACK, TFT_WHITE);
 }
