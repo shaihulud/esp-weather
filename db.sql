@@ -25,8 +25,12 @@ CREATE TABLE outside (
 );
 CREATE UNIQUE INDEX outside_dt_idx ON outside (dt);
 
+-- The indoor station writes both tables (outdoor readings arrive over ESP-NOW)
 CREATE ROLE esp32_1 WITH LOGIN PASSWORD '';
 GRANT INSERT ON room_mine TO esp32_1;
+GRANT INSERT ON outside TO esp32_1;
+-- Legacy, kept until the ESP-NOW firmware is verified on both stations:
+-- the old indoor firmware read outside, the old outdoor firmware wrote it
 GRANT SELECT ON outside TO esp32_1;
 
 CREATE ROLE esp32_2 WITH LOGIN PASSWORD '';

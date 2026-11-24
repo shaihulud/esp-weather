@@ -1,11 +1,11 @@
 # esp-weather
 
-Two ESP32 weather stations that write sensor data straight into PostgreSQL and show on the screen. Grafana draws the graphs.
+Two ESP32 weather stations that work as one: the outdoor station radios its readings to the indoor one, which shows both on its screen and writes them to PostgreSQL. Grafana draws the graphs.
 
 - **Indoor** (`esp-weather/`): BME280, SHT31, PMSA003, Senseair S8 (CO2) and an ILI9341 screen. Shows readings from both stations and a catgirl dressed for the weather outside.
-- **Outdoor** (`esp-weather-small/`): same sensors minus the screen and CO2.
+- **Outdoor** (`esp-weather-small/`): same sensors minus the screen and CO2. No WiFi login and no database: it sends every reading to the indoor station over encrypted ESP-NOW.
 
-Each station reads its sensors every 30 seconds and inserts a row (`room_mine` / `outside`). If one sensor fails, its columns go NULL and the rest is still written. Stations survive WiFi drops and dead database connections on their own, and reboot themselves if nothing was written for 10 minutes.
+Both stations read their sensors every 30 seconds. The stations come first, WiFi and the database are optional: with the router or PostgreSQL down, the screen keeps showing both stations and marks the missing uplink (`no WiFi`, `no DB`) in a status line; readings taken during an outage are not written later. If one sensor fails, its value shows `--` and its columns go NULL, the rest is still written.
 
 ## Setup
 
@@ -18,12 +18,15 @@ psql -h localhost -U postgres -d weather -f db.sql
 
 Put Postgres and Grafana passwords in `.env`. Import `Grafana/MyRoomWeather.json` into Grafana at http://localhost:3000/grafana/.
 
-Firmware (Arduino IDE, ESP32 board):
+Firmware (Arduino IDE, ESP32 board, core 3.x):
 
 1. Install libraries: Adafruit_BME280, Adafruit_SHT31, PMserial, SimplePgSQL, and TFT_eSPI for the indoor station.
-2. Indoor only: in TFT_eSPI's `User_Setup.h`, uncomment the "For ESP32 Dev board" section.
-3. In each sketch folder, copy `secrets.h.example` to `secrets.h` and fill in WiFi and database credentials.
-4. Flash. Serial monitor runs at 9600.
+2. Link this repo's shared protocol library into the sketchbook once:
+   `ln -s "$PWD/libraries/WeatherLink" ~/Documents/Arduino/libraries/WeatherLink`
+3. Indoor only: in TFT_eSPI's `User_Setup.h`, uncomment the "For ESP32 Dev board" section.
+4. In each sketch folder, copy `secrets.h.example` to `secrets.h`. Indoor: WiFi and database credentials. Both: the other station's MAC address (printed at boot, and as "MAC:" in the upload log) and the same two random 16-byte ESP-NOW keys.
+5. Optionally set `DEFAULT_CHANNEL` in `libraries/WeatherLink/src/WeatherLink.h` to your router's channel (must be 1-11). It is where both stations meet after a cold boot; they find each other on other channels too, just a little later.
+6. Flash. Serial monitor runs at 9600.
 
 ## Grafana dashboard
 
