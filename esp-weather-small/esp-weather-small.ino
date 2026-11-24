@@ -3,6 +3,7 @@
 #include <esp_wifi.h>
 #include <esp_random.h>
 #include <esp_task_wdt.h>
+#include <atomic>
 #include <Adafruit_BME280.h>
 #include "Adafruit_SHT31.h"
 #include <PMserial.h>
@@ -108,6 +109,8 @@ uint64_t nextAttemptAt = 0;
 unsigned long backoffMs = LINK_BACKOFF_MIN_MS;
 uint8_t noMemRetries = 0;
 uint8_t linkFailures = 0;         // consecutive init/recovery failures
+bool sweepRadioOk = false;        // some channel of the current sweep accepted a send
+bool needRadioRestart = false;    // session not closable or radio unusable: no linkInit() until a restart succeeds
 
 // Written by the send callback (WiFi task), read by loop() under linkMux
 portMUX_TYPE linkMux = portMUX_INITIALIZER_UNLOCKED;
@@ -118,14 +121,16 @@ esp_now_send_status_t cbStatus = ESP_NOW_SEND_FAIL;
 uint32_t radioAcks = 0;
 uint32_t sendFailures = 0;
 uint32_t samplesSuperseded = 0;
+uint32_t samplesExpired = 0;
 uint32_t linkRecoveries = 0;
 uint32_t radioRestarts = 0;
 
 #if FAULT_INJECTION
-bool fiDropCallback = false;   // swallow the next send callback
-bool fiHoldAck = false;        // take a new sample before processing the next callback
+std::atomic<bool> fiDropCallback{false};  // swallow the next send callback (WiFi task)
+bool fiHoldAck = false;        // take a new sample before processing the next SUCCESS callback
 bool fiChannelFail = false;    // make every channel change fail
-OutdoorPacket fiSent[2];       // last two distinct packets sent, newest first
+OutdoorPacket fiInFlight;      // copy of the packet in flight
+OutdoorPacket fiSent[2];       // last two radio-acked packets, newest first
 uint8_t fiSentCount = 0;
 int8_t fiResend = -1;          // index into fiSent to send once instead of pending
 #endif
@@ -146,11 +151,13 @@ void takeSample();
 void buildPacket(const SensorData& data, OutdoorPacket& pkt);
 void buildChannelList();
 bool setRadioChannel(uint8_t ch);
+bool allZero(const uint8_t* bytes, size_t len);
 bool validateLinkConfig();
 bool linkInit();
+bool closeEspNowSession();
 bool linkTeardown();
-void linkRecover(uint64_t now);
-void restartRadio();
+void linkRecover(uint64_t now, bool forceRadioRestart);
+bool restartRadio();
 void serviceLink();
 void startAttempt(uint64_t now);
 void finishAttempt(bool acked, uint64_t now);
@@ -178,9 +185,11 @@ void setup() {
     Serial.printf("MAC address: %s\n", WiFi.macAddress().c_str());
 
     buildChannelList();
-    // Cold boot: always start from the configured default channel
+    // Cold boot: always start from the configured default channel. If the
+    // radio can't even do that, no session is opened before a radio restart.
     if (!setRadioChannel(goodChannel)) {
         Serial.println("WARNING: could not set the default channel");
+        needRadioRestart = true;
     }
 
     bootId = esp_random();  // hardware RNG, seeded by the running radio
@@ -192,7 +201,7 @@ void setup() {
 
     linkConfigOk = validateLinkConfig();
     if (linkConfigOk) {
-        if (linkInit()) {
+        if (!needRadioRestart && linkInit()) {
             linkState = LinkState::IDLE;
         } else {
             linkFailures++;
@@ -529,19 +538,27 @@ bool validateLinkConfig() {
         Serial.println("ERROR: INDOOR_MAC in secrets.h is not a unicast MAC, link disabled");
         return false;
     }
-    bool keyZero = true;
-    for (int i = 0; i < ESP_NOW_KEY_LEN; i++) {
-        keyZero = keyZero && ESPNOW_LMK[i] == 0 && ESPNOW_PMK[i] == 0;
+    if (allZero(ESPNOW_PMK, ESP_NOW_KEY_LEN)) {
+        Serial.println("WARNING: ESPNOW_PMK in secrets.h is all zero (placeholder)");
     }
-    if (keyZero) {
-        Serial.println("WARNING: ESP-NOW keys in secrets.h are all zero");
+    if (allZero(ESPNOW_LMK, ESP_NOW_KEY_LEN)) {
+        Serial.println("WARNING: ESPNOW_LMK in secrets.h is all zero (placeholder)");
+    }
+    return true;
+}
+
+bool allZero(const uint8_t* bytes, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        if (bytes[i] != 0) {
+            return false;
+        }
     }
     return true;
 }
 
 // Opens the ESP-NOW session. Callback state is reset before the callback is
 // registered; a failure after esp_now_init() is unwound so the next attempt
-// starts clean.
+// starts clean - or, if the unwind fails, a radio restart is required first.
 bool linkInit() {
     portENTER_CRITICAL(&linkMux);
     cbDone = false;
@@ -572,8 +589,9 @@ bool linkInit() {
     }
     if (err != ESP_OK) {
         Serial.printf("ERROR: ESP-NOW %s failed: %s\n", step, esp_err_to_name(err));
-        esp_now_unregister_send_cb();
-        esp_now_deinit();
+        if (!closeEspNowSession()) {
+            needRadioRestart = true;
+        }
         return false;
     }
 
@@ -581,9 +599,9 @@ bool linkInit() {
     return true;
 }
 
-// Closes the ESP-NOW session; false if the deinit could not be confirmed
-bool linkTeardown() {
-    linkState = LinkState::DOWN;
+// Unregisters the send callback, then deinitializes; true only if the
+// session is confirmed closed (NOT_INIT counts: nothing was open)
+bool closeEspNowSession() {
     esp_err_t err = esp_now_unregister_send_cb();
     if (err != ESP_OK && err != ESP_ERR_ESPNOW_NOT_INIT) {
         Serial.printf("WARNING: unregister_send_cb failed: %s\n", esp_err_to_name(err));
@@ -596,43 +614,78 @@ bool linkTeardown() {
     return true;
 }
 
+// Closes the ESP-NOW session; a close that can't be confirmed requires a
+// radio restart before the next session
+bool linkTeardown() {
+    linkState = LinkState::DOWN;
+    bool closed = closeEspNowSession();
+    if (!closed) {
+        needRadioRestart = true;
+    }
+    return closed;
+}
+
 // Recovery from a broken or unresolved session (missing callback, session
-// errors). The callback is unregistered and the session closed, then a
-// quiesce period far longer than any MAC retry sequence passes before a new
-// session starts. ESP-NOW is closed source, so a late callback of the old
-// session can't be ruled out completely; at worst it would be credited to
-// the next transmission (an occasional lost sample, accepted). A teardown
-// that fails escalates to a radio restart. The link stays DOWN, sending
-// nothing, until an init succeeds.
-void linkRecover(uint64_t now) {
+// errors) or an unusable radio (forceRadioRestart: no channel of a whole
+// sweep could be used). The callback is unregistered and the session
+// closed, then a quiesce period far longer than any MAC retry sequence
+// passes before a new session starts. ESP-NOW is closed source, so a late
+// callback of the old session can't be ruled out completely; at worst it
+// would be credited to the next transmission (an occasional lost sample,
+// accepted). A failed teardown, repeated failures or a forced restart
+// escalate to a radio restart; while that hasn't succeeded no new session
+// is opened. The link stays DOWN, sending nothing, until an init succeeds.
+void linkRecover(uint64_t now, bool forceRadioRestart) {
     linkRecoveries++;
     Serial.println("ESP-NOW: recovering link");
     bool closed = linkTeardown();
-    if (!closed || ++linkFailures >= LINK_FAILURES_BEFORE_RADIO_RESTART) {
-        restartRadio();
+    if (closed && ++linkFailures >= LINK_FAILURES_BEFORE_RADIO_RESTART) {
+        needRadioRestart = true;
+    }
+    if (forceRadioRestart) {
+        needRadioRestart = true;
+    }
+    if (needRadioRestart && restartRadio()) {
         linkFailures = 0;
     }
     delay(LINK_QUIESCE_MS);
 
-    if (linkInit()) {
+    if (needRadioRestart) {
+        Serial.println("ESP-NOW: radio not recovered, retrying the restart later");
+    } else if (linkInit()) {
         linkState = LinkState::IDLE;
     } else {
         linkFailures++;
     }
     sweepIndex = 0;
+    sweepRadioOk = false;
     scheduleBackoff(now);
 }
 
-// Restarts the WiFi driver; ESP-NOW must already be torn down
-void restartRadio() {
+// Restarts the WiFi driver (WIFI_OFF stops and deinitializes it, which
+// also ends an ESP-NOW session that could not be closed). Every step is
+// checked; only a full success clears needRadioRestart.
+bool restartRadio() {
     radioRestarts++;
     Serial.println("Restarting WiFi radio");
-    WiFi.mode(WIFI_OFF);
-    delay(100);
-    if (!WiFi.mode(WIFI_STA)) {
-        Serial.println("ERROR: WiFi restart failed");
+    bool ok = WiFi.mode(WIFI_OFF);
+    if (!ok) {
+        Serial.println("ERROR: WiFi driver did not stop");
+    } else {
+        delay(100);
+        ok = WiFi.mode(WIFI_STA);
+        if (!ok) {
+            Serial.println("ERROR: WiFi driver did not start");
+        }
     }
-    setRadioChannel(goodChannel);
+    if (ok) {
+        ok = setRadioChannel(goodChannel);
+        if (!ok) {
+            Serial.println("ERROR: radio unusable after the restart (channel not set)");
+        }
+    }
+    needRadioRestart = !ok;
+    return ok;
 }
 
 void serviceLink() {
@@ -647,7 +700,13 @@ void serviceLink() {
                 return;
             }
             if (linkFailures >= LINK_FAILURES_BEFORE_RADIO_RESTART) {
-                restartRadio();
+                needRadioRestart = true;
+            }
+            if (needRadioRestart) {
+                if (!restartRadio()) {
+                    scheduleBackoff(now);  // never a session on an unrecovered radio
+                    return;
+                }
                 linkFailures = 0;
             }
             if (linkInit()) {
@@ -662,6 +721,13 @@ void serviceLink() {
         case LinkState::IDLE:
             if (now < nextAttemptAt) {
                 return;
+            }
+            // The indoor station rejects samples past this age: don't send them
+            if (hasPending && now - pendingSampledAtMs > weatherlink::MAX_SAMPLE_AGE_MS) {
+                samplesExpired++;
+                hasPending = false;
+                Serial.printf("Sample seq %lu expired unsent (%lus old)\n", (unsigned long)pending.seq,
+                              (unsigned long)((now - pendingSampledAtMs) / 1000));
             }
 #if FAULT_INJECTION
             if (!hasPending && fiResend < 0) {
@@ -685,17 +751,22 @@ void serviceLink() {
 
             if (done) {
 #if FAULT_INJECTION
-                if (fiHoldAck) {
+                // Only a SUCCESS exercises "ACK for an old seq with a newer
+                // pending sample"; a FAIL keeps the hook armed
+                if (fiHoldAck && status == ESP_NOW_SEND_SUCCESS) {
                     fiHoldAck = false;
-                    Serial.println("FI: taking a new sample before processing the callback");
+                    Serial.printf("FI: taking a new sample before processing the ACK of seq %lu\n",
+                                  (unsigned long)inFlightSeq);
                     takeSample();
+                } else if (fiHoldAck) {
+                    Serial.println("FI: send callback was FAIL, hold-ack stays armed");
                 }
 #endif
                 finishAttempt(status == ESP_NOW_SEND_SUCCESS, now);
             } else if (now >= inFlightDeadline) {
                 Serial.printf("ESP-NOW: no send callback for seq %lu within %lums\n",
                               (unsigned long)inFlightSeq, SEND_CB_TIMEOUT_MS);
-                linkRecover(now);
+                linkRecover(now, false);
             }
             return;
         }
@@ -703,6 +774,9 @@ void serviceLink() {
 }
 
 void startAttempt(uint64_t now) {
+    if (sweepIndex == 0) {
+        sweepRadioOk = false;  // a new sweep starts
+    }
     uint8_t ch = sweepChannel(sweepIndex);
     if (!setRadioChannel(ch)) {
         advanceSweep(now);
@@ -727,17 +801,16 @@ void startAttempt(uint64_t now) {
     esp_err_t err = esp_now_send(INDOOR_MAC, (const uint8_t*)&buf, sizeof(buf));
     switch (err) {
         case ESP_OK:
+            // The radio is usable on this channel; whether the peer answers
+            // is a separate question (FAIL callbacks never restart the radio)
+            sweepRadioOk = true;
             noMemRetries = 0;
             inFlightSeq = buf.seq;
             inFlightChannel = ch;
             inFlightDeadline = now + SEND_CB_TIMEOUT_MS;
             linkState = LinkState::IN_FLIGHT;
 #if FAULT_INJECTION
-            if (fiSentCount == 0 || fiSent[0].seq != buf.seq) {
-                fiSent[1] = fiSent[0];
-                fiSent[0] = buf;
-                fiSentCount = min(fiSentCount + 1, 2);
-            }
+            fiInFlight = buf;
 #endif
             return;
 
@@ -762,7 +835,7 @@ void startAttempt(uint64_t now) {
             // NOT_INIT, NOT_FOUND, IF (interface mismatch), ARG, INTERNAL:
             // the session or its configuration is broken, sweeping can't fix it
             Serial.printf("ESP-NOW: send failed: %s\n", esp_err_to_name(err));
-            linkRecover(now);
+            linkRecover(now, false);
             return;
     }
 }
@@ -787,6 +860,15 @@ void finishAttempt(bool acked, uint64_t now) {
     sweepIndex = 0;
     backoffMs = LINK_BACKOFF_MIN_MS;
     linkFailures = 0;
+#if FAULT_INJECTION
+    // Remember radio-acked packets for the d/o resend tests (a MAC ACK, so
+    // still only "very likely received": check the indoor log)
+    if (fiSentCount == 0 || fiInFlight.seq > fiSent[0].seq) {
+        fiSent[1] = fiSent[0];
+        fiSent[0] = fiInFlight;
+        fiSentCount = min(fiSentCount + 1, 2);
+    }
+#endif
 
     // A newer sample may have replaced pending while this one was in flight;
     // only the acknowledged measurement is cleared
@@ -797,7 +879,10 @@ void finishAttempt(bool acked, uint64_t now) {
 }
 
 // Next attempt of the sweep (goodChannel twice, then every other allowed
-// channel); after a full failed sweep go back to goodChannel and back off
+// channel); after a full failed sweep go back to goodChannel and back off.
+// A sweep in which no channel could be used at all (every channel change
+// or send rejected locally) is a local radio failure, not an absent peer:
+// that escalates to a radio restart.
 void advanceSweep(uint64_t now) {
     sweepIndex++;
     if (sweepIndex < sweepLength()) {
@@ -805,6 +890,11 @@ void advanceSweep(uint64_t now) {
         return;
     }
     sweepIndex = 0;
+    if (!sweepRadioOk) {
+        Serial.println("ESP-NOW: no channel of the sweep was usable, recovering the radio");
+        linkRecover(now, true);
+        return;
+    }
     Serial.printf("ESP-NOW: indoor station not reachable on any channel, retry in %lus\n",
                   backoffMs / 1000);
     setRadioChannel(goodChannel);
@@ -843,8 +933,7 @@ void scheduleBackoff(uint64_t now) {
 // WiFi task context: record the result only, the loop does the rest
 void onEspNowSent(const esp_now_send_info_t* info, esp_now_send_status_t status) {
 #if FAULT_INJECTION
-    if (fiDropCallback) {
-        fiDropCallback = false;
+    if (fiDropCallback.exchange(false)) {
         return;
     }
 #endif
@@ -855,22 +944,29 @@ void onEspNowSent(const esp_now_send_info_t* info, esp_now_send_status_t status)
 }
 
 void logStats() {
-    Serial.printf("STATS uptime %lus: radio-acks %lu, send failures %lu, superseded %lu, "
+    Serial.printf("STATS uptime %lus: radio-acks %lu, send failures %lu, superseded %lu, expired %lu, "
                   "link recoveries %lu, radio restarts %lu, channel %u, free heap %lu (min %lu)\n",
                   (unsigned long)(monoMs() / 1000), (unsigned long)radioAcks,
                   (unsigned long)sendFailures, (unsigned long)samplesSuperseded,
+                  (unsigned long)samplesExpired,
                   (unsigned long)linkRecoveries, (unsigned long)radioRestarts, goodChannel,
                   (unsigned long)ESP.getFreeHeap(), (unsigned long)ESP.getMinFreeHeap());
 }
 
 #if FAULT_INJECTION
-// c: drop the next send callback (missing-callback recovery; the same seq is
-//    then resent, which the indoor station must count as a duplicate)
-// h: take a new sample before processing the next send callback (an ACK for
-//    the old seq must not clear the newer pending sample)
-// f: toggle failure of every channel change
-// d: resend the last sent packet (duplicate)
-// o: resend the packet sent before it (out of order)
+// c: drop the next send callback (missing-callback recovery). The same seq
+//    is resent afterwards: if the first frame did arrive, the indoor log
+//    shows "duplicate"; if not, it is simply accepted.
+// h: take a new sample before processing the next SUCCESS callback (the
+//    ACK for the old seq must not clear the newer pending sample: the
+//    newer seq is sent next)
+// f: toggle failure of every channel change (whole sweeps fail locally ->
+//    radio restart; restarts keep failing on the link backoff, no session
+//    is opened; toggle again to recover)
+// d: resend the last radio-acked packet (duplicate)
+// o: resend the radio-acked packet before it (out of order)
+// A radio ACK is not proof of acceptance: verify d/o against the indoor
+// log ("Outdoor seq N duplicate" / "out of order") for the seq printed here.
 void handleFaultInjection() {
     while (Serial.available()) {
         int command = Serial.read();

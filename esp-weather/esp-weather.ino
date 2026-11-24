@@ -167,7 +167,7 @@ struct DbJob {
 };
 
 enum class DbResult { OK, SQL_ERROR, CONN_ERROR, DROPPED };
-enum class DbConn : uint8_t { UNKNOWN, UP, DOWN, DISABLED };
+enum class DbConn : uint8_t { UNKNOWN, UP, DOWN, NO_WORKER };  // not DISABLED: Arduino macro
 enum class TableStatus : uint8_t { UNKNOWN, OK, SQL_ERR };
 
 // Published as a whole by the DB worker (authoritative), read by loop()
@@ -177,20 +177,23 @@ struct DbStatus {
     TableStatus room;
     TableStatus outside;
     uint64_t retryAtMs;        // while DOWN: no DB work before this
+    uint64_t discardBeforeMs;  // outage watermark: never write measurements older than this
 };
 
 // Published as a whole by loop(), read by the DB worker
 struct WifiStatus {
     bool up;
     uint32_t generation;       // +1 per new connection
+    uint64_t upSinceMs;        // start of the current connection
 };
 
 enum class WifiState {
-    IDLE,         // listening for ESP-NOW, waiting for the next attempt
+    IDLE,         // listening for ESP-NOW (verified channel), waiting for the next attempt
     CONNECTING,
     CONNECTED,
     STOPPING,     // attempt/connection cancelled, waiting for confirmation
-    RESTORING     // putting the radio back on the listening channel
+    RESTORING,    // putting the radio back on the listening channel
+    RADIO_FAULT   // radio restart failed or deferred: unverified, waiting to retry
 };
 
 // Global objects
@@ -214,7 +217,7 @@ bool dbTimedOut = false;      // stuck-state reset during the current job
 bool jobDropped = false;      // pre-submission check rejected the current job
 const DbJob* pendingJob = nullptr;
 bool workerWdtActive = false;
-unsigned long maxJobMs = 0;
+uint64_t discardBeforeMs = 0; // outage watermark (published in DbStatus)
 
 // --- loop task only ---
 uint8_t sht31Failures = 0;    // consecutive invalid readings, re-init at threshold
@@ -249,9 +252,13 @@ bool channelSet = false;
 uint64_t channelSetAt = 0;
 bool radioRestarted = false;
 uint64_t lastRadioRestartAt = 0;
+uint64_t radioRetryAt = 0;    // RADIO_FAULT: next restart attempt
+bool radioVerified = false;   // radio confirmed on the listening channel
+bool radioRestartRequested = false;
 
 bool linkEnabled = false;     // rx queue exists and config is valid
 bool linkReady = false;       // ESP-NOW session up
+bool linkSessionDirty = false; // a session could not be closed: only a radio restart clears it
 uint64_t linkRetryAt = 0;
 unsigned long linkRetryMs = LINK_RETRY_MIN;
 
@@ -265,9 +272,9 @@ QueueHandle_t dbQueue = nullptr;    // loop -> dbWorker
 TaskHandle_t dbWorkerHandle = nullptr;
 
 portMUX_TYPE wifiStatusMux = portMUX_INITIALIZER_UNLOCKED;
-WifiStatus wifiStatus = {false, 0};
+WifiStatus wifiStatus = {false, 0, 0};
 portMUX_TYPE dbStatusMux = portMUX_INITIALIZER_UNLOCKED;
-DbStatus dbStatus = {DbConn::UNKNOWN, TableStatus::UNKNOWN, TableStatus::UNKNOWN, 0};
+DbStatus dbStatus = {DbConn::UNKNOWN, TableStatus::UNKNOWN, TableStatus::UNKNOWN, 0, 0};
 
 // Written by the Arduino event task
 portMUX_TYPE wifiEventMux = portMUX_INITIALIZER_UNLOCKED;
@@ -294,6 +301,7 @@ std::atomic<uint32_t> dbInserted{0};       // dbWorker
 std::atomic<uint32_t> dbSqlErrors{0};
 std::atomic<uint32_t> dbConnErrors{0};
 std::atomic<uint32_t> dbJobsDropped{0};
+std::atomic<unsigned long> maxJobMs{0};
 
 #if FAULT_INJECTION
 uint64_t fiStallRxUntil = 0;
@@ -330,13 +338,17 @@ void serviceRestoring(uint64_t now);
 void enterWifiState(WifiState state, uint64_t now);
 void scheduleNextWifiAttempt(uint64_t now);
 void restartRadio(uint64_t now);
+void enterRadioFault(uint64_t now, uint64_t retryAt, const char* why);
 void readAllowedChannels();
 bool channelAllowed(uint8_t ch);
+uint8_t fallbackChannel();
 bool setRadioChannel(uint8_t ch);
 bool radioOnChannel(uint8_t ch);
+bool allZero(const uint8_t* bytes, size_t len);
 bool validateLinkConfig();
 bool linkInit();
-void linkTeardown();
+bool closeEspNowSession();
+bool linkTeardown();
 void maintainLink(uint64_t now);
 void onEspNowRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len);
 bool drainOutdoorRx();
@@ -348,7 +360,9 @@ bool outdoorIsStale();
 void enqueueDbJob(DbTable table, const SensorData& data, uint64_t capturedAtMs, uint32_t priorAgeMs);
 const char* tableName(DbTable table);
 uint64_t jobAgeMs(const DbJob& job, uint64_t now);
-const char* jobRejectReason(const DbJob& job, const WifiStatus& wifi, uint64_t now);
+uint64_t jobMeasuredAtMs(const DbJob& job);
+const char* jobRejectReason(const DbJob& job, const WifiStatus& wifi, uint64_t dbWatermarkMs,
+                            uint64_t now);
 void dbWorker(void* param);
 bool formatInsert(const DbJob& job, uint64_t now, char* query, size_t size);
 DbResult runQuery(const DbJob& job);
@@ -410,10 +424,13 @@ void setup() {
     // Cold boot: listen on the configured default channel until the router
     // tells us otherwise
     readAllowedChannels();
-    listenChannel = channelAllowed(weatherlink::DEFAULT_CHANNEL) ? weatherlink::DEFAULT_CHANNEL : channelMin;
+    listenChannel = fallbackChannel();
     routerChannel = listenChannel;
-    if (!setRadioChannel(listenChannel)) {
+    radioVerified = setRadioChannel(listenChannel);
+    if (!radioVerified) {
+        // maintainWiFi() keeps retrying (and escalates); ESP-NOW waits
         Serial.println("WARNING: could not set the default channel");
+        enterRestoring(monoMs());
     }
 
     if (!initializeSensors()) {
@@ -422,9 +439,10 @@ void setup() {
 
     checkStatusFit();
 
-    // ESP-NOW last, once everything its callback touches exists
+    // ESP-NOW last, once everything its callback touches exists; on an
+    // unverified radio maintainLink() opens it after RESTORING succeeds
     linkEnabled = rxQueue != nullptr && validateLinkConfig();
-    if (linkEnabled) {
+    if (linkEnabled && radioVerified) {
         linkReady = linkInit();
         if (!linkReady) {
             linkRetryAt = monoMs() + linkRetryMs;
@@ -437,7 +455,7 @@ void setup() {
     } else {
         dbWorkerHandle = nullptr;
         Serial.println("ERROR: DB worker could not start, database disabled");
-        DbStatus disabled = {DbConn::DISABLED, TableStatus::UNKNOWN, TableStatus::UNKNOWN, 0};
+        DbStatus disabled = {DbConn::NO_WORKER, TableStatus::UNKNOWN, TableStatus::UNKNOWN, 0, 0};
         publishDbStatus(disabled);
     }
 
@@ -762,11 +780,13 @@ WifiStatus readWifiStatus() {
 }
 
 // Loop only. A new connection starts a new generation: jobs queued in an
-// older one are discarded by the worker
+// older one, or measured before this connection started, are discarded
 void publishWifiStatus(bool up) {
+    uint64_t now = monoMs();
     portENTER_CRITICAL(&wifiStatusMux);
     if (up && !wifiStatus.up) {
         wifiStatus.generation++;
+        wifiStatus.upSinceMs = now;
     }
     wifiStatus.up = up;
     portEXIT_CRITICAL(&wifiStatusMux);
@@ -822,6 +842,16 @@ void maintainWiFi() {
     bool coreRetry = coreRetryPending;
     coreRetryPending = false;
     portEXIT_CRITICAL(&wifiEventMux);
+
+    // ESP-NOW could not close a session: only a driver restart can
+    if (radioRestartRequested) {
+        radioRestartRequested = false;
+        if (wifiState != WifiState::RADIO_FAULT) {
+            restartRadio(now);
+            return;
+        }
+        // RADIO_FAULT restarts the radio when its retry is due anyway
+    }
 
     switch (wifiState) {
         case WifiState::IDLE:
@@ -907,6 +937,14 @@ void maintainWiFi() {
             }
             serviceRestoring(now);
             return;
+
+        case WifiState::RADIO_FAULT:
+            // No WiFi attempts and no new ESP-NOW session on an unverified
+            // radio; only the next restart can leave this state
+            if (now >= radioRetryAt) {
+                restartRadio(now);
+            }
+            return;
     }
 }
 
@@ -943,13 +981,15 @@ void beginStopping(uint64_t now, bool knownIdle) {
 }
 
 // Listening channel: the router's (where the outdoor station last found
-// us) if both stations support it, otherwise the shared default
+// us) if both stations support it, otherwise the shared fallback
 void enterRestoring(uint64_t now) {
-    listenChannel = channelAllowed(routerChannel) ? routerChannel : weatherlink::DEFAULT_CHANNEL;
+    listenChannel = channelAllowed(routerChannel) ? routerChannel : fallbackChannel();
     channelSet = false;
     enterWifiState(WifiState::RESTORING, now);
 }
 
+// The only way to IDLE: the channel was set and still holds after the
+// settle time (an attempt still scanning would have moved it)
 void serviceRestoring(uint64_t now) {
     if (!channelSet) {
         if (setRadioChannel(listenChannel)) {
@@ -959,6 +999,7 @@ void serviceRestoring(uint64_t now) {
     } else if (now - channelSetAt >= CHANNEL_SETTLE_MS) {
         if (radioOnChannel(listenChannel)) {
             Serial.printf("Listening for the outdoor station on channel %u\n", listenChannel);
+            radioVerified = true;
             scheduleNextWifiAttempt(now);
             enterWifiState(WifiState::IDLE, now);
             return;
@@ -986,62 +1027,92 @@ void scheduleNextWifiAttempt(uint64_t now) {
     wifiRetryMs = max(WIFI_RETRY_MIN, min(wifiRetryMs * 2, WIFI_RETRY_MAX));
 }
 
-// Subsystem recovery, only on evidence of a radio malfunction (an attempt
-// that can't be stopped, a channel that can't be restored) - never because
-// the router is simply unavailable. Rate-limited; never a reboot.
+// Subsystem recovery, only on evidence of a radio malfunction (a channel
+// that can't be restored, an ESP-NOW session that can't be closed) - never
+// because the router is simply unavailable. Rate-limited; never a reboot.
+// Success leads to RESTORING, which verifies the channel before IDLE; a
+// deferred or failed restart waits in RADIO_FAULT.
 void restartRadio(uint64_t now) {
     if (radioRestarted && now - lastRadioRestartAt < RADIO_RESTART_MIN_INTERVAL) {
-        Serial.println("WiFi: radio restart deferred, the last one was too recent");
-        wifiNextAttemptAt = lastRadioRestartAt + RADIO_RESTART_MIN_INTERVAL;
-        enterWifiState(WifiState::IDLE, now);
+        enterRadioFault(now, lastRadioRestartAt + RADIO_RESTART_MIN_INTERVAL,
+                        "restart deferred, the last one was too recent");
         return;
     }
     radioRestarted = true;
     lastRadioRestartAt = now;
     radioRestarts++;
+    radioVerified = false;
     Serial.println("Restarting WiFi radio");
     publishWifiStatus(false);
 
     // ESP-NOW must be closed before the WiFi driver stops; it is reopened by
-    // maintainLink() once the radio is back
-    if (linkReady) {
-        linkTeardown();
+    // maintainLink() once the radio is verified. If closing fails, the
+    // driver deinit below is what ends the session.
+    if (linkReady || linkSessionDirty) {
+        if (!linkTeardown()) {
+            Serial.println("WiFi: ESP-NOW session not closed, relying on the driver restart");
+        }
     }
-    WiFi.mode(WIFI_OFF);
+    // WIFI_OFF stops and deinitializes the driver (esp_wifi_stop + deinit)
+    if (!WiFi.mode(WIFI_OFF)) {
+        enterRadioFault(now, now + RADIO_RESTART_MIN_INTERVAL, "WiFi driver did not stop");
+        return;
+    }
     delay(100);
     if (!WiFi.mode(WIFI_STA)) {
-        Serial.println("ERROR: WiFi restart failed");
+        enterRadioFault(now, now + RADIO_RESTART_MIN_INTERVAL, "WiFi driver did not start");
+        return;
     }
-    WiFi.setSleep(false);
-    if (!setRadioChannel(listenChannel)) {
-        Serial.println("ERROR: listening channel not set after the radio restart");
+    if (!WiFi.setSleep(false)) {
+        enterRadioFault(now, now + RADIO_RESTART_MIN_INTERVAL, "modem sleep not disabled");
+        return;
     }
+    linkSessionDirty = false;  // the driver restart ended any old session
     linkRetryAt = 0;
     linkRetryMs = LINK_RETRY_MIN;
+    Serial.println("WiFi radio restarted, verifying the listening channel");
+    enterRestoring(now);
+}
 
-    scheduleNextWifiAttempt(now);
-    enterWifiState(WifiState::IDLE, now);
+void enterRadioFault(uint64_t now, uint64_t retryAt, const char* why) {
+    radioVerified = false;
+    radioRetryAt = retryAt;
+    Serial.printf("ERROR: WiFi radio fault (%s), next restart in %lus\n", why,
+                  (unsigned long)((retryAt > now ? retryAt - now : 0) / 1000));
+    enterWifiState(WifiState::RADIO_FAULT, now);
 }
 
 // Allowed channels: the shared CHANNEL_MIN..MAX range limited to the
 // radio's regulatory domain
 void readAllowedChannels() {
     wifi_country_t country;
-    if (esp_wifi_get_country(&country) == ESP_OK && country.nchan > 0) {
+    bool haveCountry = esp_wifi_get_country(&country) == ESP_OK && country.nchan > 0;
+    if (haveCountry) {
         channelMin = max(weatherlink::CHANNEL_MIN, country.schan);
         channelMax = min(weatherlink::CHANNEL_MAX, (uint8_t)(country.schan + country.nchan - 1));
     } else {
         Serial.println("WARNING: could not read the regulatory domain, using the configured channels");
     }
     if (channelMin > channelMax) {
-        Serial.println("ERROR: no allowed channel, using the default channel only");
-        channelMin = channelMax = weatherlink::DEFAULT_CHANNEL;
+        // Use a channel the radio actually supports; the outdoor station
+        // only searches CHANNEL_MIN..MAX, so the link may not work at all
+        uint8_t ch = haveCountry ? country.schan : weatherlink::DEFAULT_CHANNEL;
+        Serial.printf("ERROR: the regulatory domain allows no channel in %u-%u, using %u; "
+                      "the outdoor link may not work\n",
+                      weatherlink::CHANNEL_MIN, weatherlink::CHANNEL_MAX, ch);
+        channelMin = channelMax = ch;
     }
     Serial.printf("Allowed channels: %u-%u\n", channelMin, channelMax);
 }
 
 bool channelAllowed(uint8_t ch) {
     return ch >= channelMin && ch <= channelMax;
+}
+
+// Where both stations meet without other information: the configured
+// default if the regulatory domain allows it, else the lowest allowed one
+uint8_t fallbackChannel() {
+    return channelAllowed(weatherlink::DEFAULT_CHANNEL) ? weatherlink::DEFAULT_CHANNEL : channelMin;
 }
 
 // Sets the radio channel and reads it back; false if either step fails
@@ -1083,18 +1154,27 @@ bool validateLinkConfig() {
         Serial.println("ERROR: OUTDOOR_MAC in secrets.h is not a unicast MAC, outdoor link disabled");
         return false;
     }
-    bool keyZero = true;
-    for (int i = 0; i < ESP_NOW_KEY_LEN; i++) {
-        keyZero = keyZero && ESPNOW_LMK[i] == 0 && ESPNOW_PMK[i] == 0;
+    if (allZero(ESPNOW_PMK, ESP_NOW_KEY_LEN)) {
+        Serial.println("WARNING: ESPNOW_PMK in secrets.h is all zero (placeholder)");
     }
-    if (keyZero) {
-        Serial.println("WARNING: ESP-NOW keys in secrets.h are all zero");
+    if (allZero(ESPNOW_LMK, ESP_NOW_KEY_LEN)) {
+        Serial.println("WARNING: ESPNOW_LMK in secrets.h is all zero (placeholder)");
+    }
+    return true;
+}
+
+bool allZero(const uint8_t* bytes, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        if (bytes[i] != 0) {
+            return false;
+        }
     }
     return true;
 }
 
 // Opens the ESP-NOW session; a failure after esp_now_init() is unwound so
-// the next attempt starts clean
+// the next attempt starts clean - or, if the unwind fails, marks the
+// session dirty so only a radio restart can open the next one
 bool linkInit() {
     esp_err_t err = esp_now_init();
     if (err != ESP_OK) {
@@ -1120,8 +1200,9 @@ bool linkInit() {
     }
     if (err != ESP_OK) {
         Serial.printf("ERROR: ESP-NOW %s failed: %s\n", step, esp_err_to_name(err));
-        esp_now_unregister_recv_cb();
-        esp_now_deinit();
+        if (!closeEspNowSession()) {
+            linkSessionDirty = true;
+        }
         return false;
     }
 
@@ -1129,25 +1210,46 @@ bool linkInit() {
     return true;
 }
 
-// Closes the session; the receive callback is unregistered first, and the
-// quiesce lets a callback that is already running finish (rxQueue is never
-// deleted, so it stays valid either way)
-void linkTeardown() {
-    linkReady = false;
+// Unregisters the receive callback, then deinitializes; true only if the
+// session is confirmed closed (NOT_INIT counts: nothing was open)
+bool closeEspNowSession() {
     esp_err_t err = esp_now_unregister_recv_cb();
     if (err != ESP_OK && err != ESP_ERR_ESPNOW_NOT_INIT) {
         Serial.printf("WARNING: unregister_recv_cb failed: %s\n", esp_err_to_name(err));
     }
     err = esp_now_deinit();
     if (err != ESP_OK && err != ESP_ERR_ESPNOW_NOT_INIT) {
-        Serial.printf("WARNING: esp_now_deinit failed: %s\n", esp_err_to_name(err));
+        Serial.printf("ERROR: esp_now_deinit failed: %s\n", esp_err_to_name(err));
+        return false;
     }
-    delay(LINK_QUIESCE_MS);
+    return true;
 }
 
-// Retries opening the session with backoff while it is down
+// Closes the session; the quiesce lets a callback that is already running
+// finish (rxQueue is never deleted, so it stays valid either way). A failed
+// close leaves the session dirty until a radio restart.
+bool linkTeardown() {
+    linkReady = false;
+    bool closed = closeEspNowSession();
+    if (!closed) {
+        linkSessionDirty = true;
+    }
+    delay(LINK_QUIESCE_MS);
+    return closed;
+}
+
+// Retries opening the session with backoff while it is down. Never on an
+// unverified radio, and never while an old session could not be closed:
+// that one needs a radio restart first.
 void maintainLink(uint64_t now) {
-    if (!linkEnabled || linkReady || now < linkRetryAt) {
+    if (!linkEnabled || linkReady || !radioVerified || now < linkRetryAt) {
+        return;
+    }
+    if (linkSessionDirty) {
+        if (!radioRestartRequested) {
+            Serial.println("ESP-NOW: old session not closed, requesting a radio restart");
+            radioRestartRequested = true;
+        }
         return;
     }
     linkReady = linkInit();
@@ -1319,19 +1421,14 @@ void enqueueDbJob(DbTable table, const SensorData& data, uint64_t capturedAtMs, 
     }
     WifiStatus wifi = readWifiStatus();
     DbStatus db = readDbStatus();
-    const char* reason = nullptr;
-    if (!wifi.up) {
-        reason = "no WiFi";
-    } else if (db.conn == DbConn::DOWN && monoMs() < db.retryAtMs) {
-        reason = "database backoff";
-    }
+    DbJob job = {table, data, capturedAtMs, priorAgeMs, wifi.generation};
+    const char* reason = jobRejectReason(job, wifi, db.discardBeforeMs, monoMs());
     if (reason) {
         jobsNotQueued++;
         Serial.printf("Not writing %s row: %s\n", tableName(table), reason);
         return;
     }
 
-    DbJob job = {table, data, capturedAtMs, priorAgeMs, wifi.generation};
     if (xQueueSend(dbQueue, &job, 0) != pdTRUE) {
         jobsQueueFull++;
         Serial.printf("Not writing %s row: DB queue full\n", tableName(table));
@@ -1347,14 +1444,32 @@ uint64_t jobAgeMs(const DbJob& job, uint64_t now) {
     return sinceCapture + job.priorAgeMs;
 }
 
-// Checks shared by the worker (before any DB work) and the pre-submission
-// check (right before the query is sent)
-const char* jobRejectReason(const DbJob& job, const WifiStatus& wifi, uint64_t now) {
+// Measurement time on this station's clock; a measurement older than this
+// boot maps to 0 (underflow-safe, and older than any watermark)
+uint64_t jobMeasuredAtMs(const DbJob& job) {
+    return job.capturedAtMs > job.priorAgeMs ? job.capturedAtMs - job.priorAgeMs : 0;
+}
+
+// Checks shared by the producer (filter), the worker (before any DB work)
+// and the pre-submission check (right before the query is sent). The two
+// watermarks drop measurements taken during a detected outage, wherever
+// they waited (rx queue, DB queue): before the current WiFi connection, or
+// before the end of a DB backoff. They are not a claim about when an
+// undetected outage physically began.
+const char* jobRejectReason(const DbJob& job, const WifiStatus& wifi, uint64_t dbWatermarkMs,
+                            uint64_t now) {
     if (!wifi.up) {
         return "no WiFi";
     }
     if (job.wifiGeneration != wifi.generation) {
         return "queued before a WiFi reconnect";
+    }
+    uint64_t measuredAt = jobMeasuredAtMs(job);
+    if (measuredAt < wifi.upSinceMs) {
+        return "measured before the WiFi connection";
+    }
+    if (measuredAt < dbWatermarkMs) {
+        return "measured during a database outage";
     }
     if (jobAgeMs(job, now) > DB_JOB_MAX_AGE_MS) {
         return "measurement too old";
@@ -1364,8 +1479,10 @@ const char* jobRejectReason(const DbJob& job, const WifiStatus& wifi, uint64_t n
 
 // The only owner of the PostgreSQL connection. It is authoritative for DB
 // state: it publishes DbStatus as a whole, and every job is re-validated
-// here (WiFi, generation, backoff, age) before any connection or query work.
-// Failed rows are dropped, never retried, so recovery never replays a backlog.
+// here (WiFi, generation, watermarks, age) before any connection or query
+// work. Failed rows are dropped, never retried, so recovery never replays a
+// backlog. The DB watermark covers the backoff: anything processed before
+// the backoff ends was necessarily measured before it ended.
 void dbWorker(void* param) {
     if (wdtConfigured) {
         esp_err_t err = esp_task_wdt_add(NULL);
@@ -1376,7 +1493,7 @@ void dbWorker(void* param) {
         }
     }
 
-    DbStatus status = {DbConn::UNKNOWN, TableStatus::UNKNOWN, TableStatus::UNKNOWN, 0};
+    DbStatus status = {DbConn::UNKNOWN, TableStatus::UNKNOWN, TableStatus::UNKNOWN, 0, 0};
     unsigned long backoff = DB_BACKOFF_MIN;
     uint32_t seenGeneration = 0;
 
@@ -1386,25 +1503,27 @@ void dbWorker(void* param) {
         bool haveJob = xQueueReceive(dbQueue, &job, pdMS_TO_TICKS(1000)) == pdTRUE;
 
         // New WiFi session: the old socket died with the previous
-        // association, and the old backoff was most likely about that
+        // association, and the old backoff was most likely about that. The
+        // DB watermark is capped at the session start: everything measured
+        // before it is rejected by the WiFi watermark anyway.
         WifiStatus wifi = readWifiStatus();
         if (wifi.generation != seenGeneration) {
             seenGeneration = wifi.generation;
-            resetDatabaseConnection();
+            resetDatabaseConnection();  // may block on the dead socket
             backoff = DB_BACKOFF_MIN;
+            discardBeforeMs = min(discardBeforeMs, wifi.upSinceMs);
             status.conn = DbConn::UNKNOWN;
             status.retryAtMs = 0;
+            status.discardBeforeMs = discardBeforeMs;
             publishDbStatus(status);
+            wifi = readWifiStatus();  // the cleanup took time: use a fresh snapshot
         }
         if (!haveJob) {
             continue;
         }
 
         uint64_t now = monoMs();
-        const char* reason = jobRejectReason(job, wifi, now);
-        if (!reason && status.conn == DbConn::DOWN && now < status.retryAtMs) {
-            reason = "database backoff";
-        }
+        const char* reason = jobRejectReason(job, wifi, discardBeforeMs, now);
         if (reason) {
             dbJobsDropped++;
             Serial.printf("DB: dropped %s row (%s)\n", tableName(job.table), reason);
@@ -1413,7 +1532,10 @@ void dbWorker(void* param) {
 
         unsigned long jobStart = millis();
         DbResult result = runQuery(job);
-        maxJobMs = max(maxJobMs, millis() - jobStart);
+        unsigned long jobMs = millis() - jobStart;
+        if (jobMs > maxJobMs.load()) {
+            maxJobMs.store(jobMs);  // single writer
+        }
 
         TableStatus& table = job.table == DbTable::ROOM ? status.room : status.outside;
         switch (result) {
@@ -1425,10 +1547,12 @@ void dbWorker(void* param) {
                 Serial.printf("DB: %s row written\n", tableName(job.table));
                 break;
             case DbResult::SQL_ERROR:
-                // The connection is fine; only this table's status changes
+                // The server answered, so the connection is fine (transport
+                // backoff resets); only this table's status changes
                 dbSqlErrors++;
                 status.conn = DbConn::UP;
                 table = TableStatus::SQL_ERR;
+                backoff = DB_BACKOFF_MIN;
                 Serial.printf("DB: %s row rejected by the server\n", tableName(job.table));
                 break;
             case DbResult::CONN_ERROR: {
@@ -1436,6 +1560,10 @@ void dbWorker(void* param) {
                 unsigned long wait = withJitter(backoff);
                 status.conn = DbConn::DOWN;
                 status.retryAtMs = monoMs() + wait;
+                // Everything measured before the backoff ends belongs to
+                // this outage; the watermark only ever moves forward here
+                discardBeforeMs = max(discardBeforeMs, status.retryAtMs);
+                status.discardBeforeMs = discardBeforeMs;
                 backoff = min(backoff * 2, DB_BACKOFF_MAX);
                 Serial.printf("DB: connection failed, %s row dropped, next attempt in %lus\n",
                               tableName(job.table), wait / 1000);
@@ -1608,7 +1736,7 @@ bool dispatchPendingQuery() {
     }
 
     uint64_t now = monoMs();
-    const char* reason = jobRejectReason(*pendingJob, readWifiStatus(), now);
+    const char* reason = jobRejectReason(*pendingJob, readWifiStatus(), discardBeforeMs, now);
     if (reason) {
         Serial.printf("DB: dropped %s row before submission (%s)\n",
                       tableName(pendingJob->table), reason);
@@ -1863,11 +1991,14 @@ const char* uplinkStatusText() {
         return "no WiFi";
     }
     DbStatus db = readDbStatus();
-    if (db.conn == DbConn::DOWN || db.conn == DbConn::DISABLED) {
+    if (db.conn == DbConn::DOWN || db.conn == DbConn::NO_WORKER) {
         return "no DB";
     }
     if (db.room == TableStatus::SQL_ERR || db.outside == TableStatus::SQL_ERR) {
         return "DB err";
+    }
+    if (db.conn == DbConn::UNKNOWN) {
+        return "DB...";  // WiFi is up, no DB result in this session yet
     }
     return "";
 }
@@ -1903,7 +2034,7 @@ void drawStatus() {
 // Logs any status combination that would not fit the band
 void checkStatusFit() {
     const char* links[] = {"no link", "no sens", "59m old", "23h old", ">1d old"};
-    const char* uplinks[] = {"no WiFi", "no DB", "DB err"};
+    const char* uplinks[] = {"no WiFi", "no DB", "DB err", "DB..."};
     for (const char* link : links) {
         for (const char* uplink : uplinks) {
             int width = tft.textWidth(link, 2) + STATUS_GAP + tft.textWidth(uplink, 2);
@@ -1935,7 +2066,7 @@ void logStats() {
                   (unsigned)db.conn, (unsigned)db.room, (unsigned)db.outside,
                   (unsigned long)dbInserted.load(), (unsigned long)dbSqlErrors.load(),
                   (unsigned long)dbConnErrors.load(), (unsigned long)dbJobsDropped.load(),
-                  (unsigned long)jobsNotQueued, (unsigned long)jobsQueueFull, maxJobMs);
+                  (unsigned long)jobsNotQueued, (unsigned long)jobsQueueFull, maxJobMs.load());
     Serial.printf("STATS free stack: loop %u, dbWorker %u bytes; heap free %lu, min %lu\n",
                   (unsigned)uxTaskGetStackHighWaterMark(NULL),
                   dbWorkerHandle ? (unsigned)uxTaskGetStackHighWaterMark(dbWorkerHandle) : 0U,
@@ -1943,11 +2074,16 @@ void logStats() {
 }
 
 #if FAULT_INJECTION
-// r: stall outdoor packet processing for 3 minutes (rx queue overflow; the
-//    stalled packets may still be shown, but the DB worker must drop them
-//    as too old instead of inserting a backlog)
+// r: stall outdoor packet processing for 3 minutes. The rx queue keeps the
+//    first 4 packets of the stall, the rest are counted as rx queue drops.
+//    At the end the 4 are processed at once: those older than 90s are
+//    dropped as too old; depending on phase the youngest may still be
+//    written, with its correct dt. If a DB outage was detected meanwhile,
+//    the DB watermark drops all of them.
 // f: toggle failure of every channel change (persistent channel-restore
-//    failure: rate-limited radio restarts, no reboot)
+//    failure: RESTORING fails, a radio restart, then RADIO_FAULT with a
+//    restart at most once a minute; never IDLE, no reboot). Toggle again to
+//    recover: the next restart verifies the channel and reaches IDLE.
 void handleFaultInjection() {
     while (Serial.available()) {
         switch (Serial.read()) {
