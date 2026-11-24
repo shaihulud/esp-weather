@@ -30,7 +30,7 @@ Check with `\dp outside` and `\dp room_mine`. The old outdoor role `esp32_2` and
 
 ### Firmware
 
-Built and checked against **arduino-esp32 core 3.3.12** (ESP-IDF 5.5); the ESP-NOW callback signatures need core 3.3.x. Board "ESP32 Dev Module".
+Compiles against **arduino-esp32 core 3.3.12** (ESP-IDF 5.5); the ESP-NOW callback signatures need core 3.3.x. Board "ESP32 Dev Module".
 
 1. Install libraries: Adafruit_BME280, Adafruit_SHT31, PMserial, SimplePgSQL, and TFT_eSPI for the indoor station.
 2. Link this repo's shared protocol library into the sketchbook once:

@@ -1074,7 +1074,11 @@ void restartRadio(uint64_t now) {
     enterRestoring(now);
 }
 
+// The uplink counts as down in RADIO_FAULT even if the fault was entered
+// from CONNECTED (a deferred restart request): the association is no
+// longer supervised and the next restart ends it
 void enterRadioFault(uint64_t now, uint64_t retryAt, const char* why) {
+    publishWifiStatus(false);
     radioVerified = false;
     radioRetryAt = retryAt;
     Serial.printf("ERROR: WiFi radio fault (%s), next restart in %lus\n", why,
@@ -1243,6 +1247,11 @@ bool linkTeardown() {
 // that one needs a radio restart first.
 void maintainLink(uint64_t now) {
     if (!linkEnabled || linkReady || !radioVerified || now < linkRetryAt) {
+        return;
+    }
+    // New sessions only on a settled channel; during CONNECTING, STOPPING
+    // and RESTORING the radio may be scanning. An open session stays open.
+    if (wifiState != WifiState::IDLE && wifiState != WifiState::CONNECTED) {
         return;
     }
     if (linkSessionDirty) {
